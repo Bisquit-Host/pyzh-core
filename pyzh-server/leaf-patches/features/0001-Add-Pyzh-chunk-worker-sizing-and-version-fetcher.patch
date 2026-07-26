@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 26 Jul 2026 02:51:16 +0300
+Subject: [PATCH] Add Pyzh chunk worker sizing and version fetcher
+
+
+diff --git a/java/ru/turbovadim/pyzh/chunk/ChunkSystemWorkerSizing.java b/java/ru/turbovadim/pyzh/chunk/ChunkSystemWorkerSizing.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..84f8dac478498f030ed38ff39da832604194a51b
+--- /dev/null
++++ b/java/ru/turbovadim/pyzh/chunk/ChunkSystemWorkerSizing.java
+@@ -0,0 +1,44 @@
++package ru.turbovadim.pyzh.chunk;
++
++/**
++ * Selects a chunk worker count that balances generation throughput against the
++ * CPU and heap required by the main server thread and concurrent generation.
++ *
++ * <p>The CPU limit intentionally reserves at least half of the available
++ * processors for the tick thread, plugins, networking, and JVM services. The
++ * heap limit follows C2ME's 26.2 memory model and prevents excessive concurrent
++ * generation on memory-constrained servers, where every in-flight task retains
++ * a substantial chunk neighborhood.</p>
++ *
++ * @see <a href="https://github.com/RelativityMC/C2ME-fabric/blob/87988c515a9e1c80a487baaa39490dfc78189c2a/c2me-base/src/main/java/com/ishland/c2me/base/ModuleEntryPoint.java">C2ME worker sizing source (MIT)</a>
++ */
++public final class ChunkSystemWorkerSizing {
++
++    private static final double BYTES_PER_GIBIBYTE = 1024.0 * 1024.0 * 1024.0;
++    private static final double RESERVED_HEAP_GIBIBYTES = 0.5;
++    private static final double HEAP_GIBIBYTES_PER_WORKER = 0.6;
++
++    private ChunkSystemWorkerSizing() {
++    }
++
++    public static int defaultWorkerThreads() {
++        return calculateDefaultWorkerThreads(
++            Runtime.getRuntime().availableProcessors(),
++            Runtime.getRuntime().maxMemory()
++        );
++    }
++
++    public static int calculateDefaultWorkerThreads(final int availableProcessors, final long maxHeapBytes) {
++        if (availableProcessors <= 0) {
++            throw new IllegalArgumentException("availableProcessors must be positive");
++        }
++        if (maxHeapBytes <= 0L) {
++            throw new IllegalArgumentException("maxHeapBytes must be positive");
++        }
++
++        final int cpuLimit = Math.max(1, availableProcessors / 2);
++        final double maxHeapGibibytes = maxHeapBytes / BYTES_PER_GIBIBYTE;
++        final double heapLimit = (maxHeapGibibytes - RESERVED_HEAP_GIBIBYTES) / HEAP_GIBIBYTES_PER_WORKER;
++        return (int)Math.max(1.0, Math.min(cpuLimit, heapLimit));
++    }
++}
+diff --git a/java/ru/turbovadim/pyzh/version/PyzhVersionFetcher.java b/java/ru/turbovadim/pyzh/version/PyzhVersionFetcher.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..8e1fc68cce8372b78f81d6c42c54c79d73e6bff5
+--- /dev/null
++++ b/java/ru/turbovadim/pyzh/version/PyzhVersionFetcher.java
+@@ -0,0 +1,17 @@
++package ru.turbovadim.pyzh.version;
++
++import org.galemc.gale.version.AbstractPaperVersionFetcher;
++
++public final class PyzhVersionFetcher extends AbstractPaperVersionFetcher {
++
++    public PyzhVersionFetcher() {
++        super(
++            "https://github.com/Turbovadim/pyzh-core/releases",
++            "TurboVadim",
++            "Pyzh",
++            "Turbovadim",
++            "pyzh-core",
++            ApiType.GITHUB
++        );
++    }
++}

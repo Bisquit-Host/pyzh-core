@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 21 Jul 2026 03:31:12 +0300
+Subject: [PATCH] Fix startup and offline player stability
+
+Keep terminal input under the server console owner and avoid recursive online flight-state lookup.
+
+diff --git a/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java b/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java
+index f847681ec9800445d6d7d981ca70f415d70d1812..c7a1a3a6af6e323747007e2cea28bdefcc4170ee 100644
+--- a/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java
++++ b/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java
+@@ -71,38 +71,18 @@ public final class WorldFolderMigration {
+         LOGGER.warn("If you do not have a backup: interrupt the server now. Use Ctrl+C, your panel kill function, etc.");
+         LOGGER.warn("Extra files in migrated legacy world folders may be moved, and migrated legacy folders may be deleted."); // Leaf - Forge-like startup world migration
+         LOGGER.warn("=====================================================");
+-        //LOGGER.warn("Continuing in 30 seconds..."); // Leaf - Forge-like startup world migration
++        LOGGER.warn("Continuing in 30 seconds..."); // Pyzh - keep terminal input owned by the server console
+         if (DISABLE_MIGRATION_DELAY) {
+-            // Leaf start - Forge-like startup world migration
+-            LOGGER.warn("Migration confirmation disabled by system property.");
+-            LOGGER.info("Continuing with startup world migration.");
+-            return;
+-        }
+-
+-        LOGGER.warn("Type 'confirm' to continue with startup world migration, or 'cancel' to stop the server.");
+-
+-        try {
+-            final java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(System.in));
+-            while (true) {
+-                final String line = reader.readLine();
+-                if (line == null) {
+-                    LOGGER.warn("World migration is still waiting for confirmation. Type 'confirm' to continue, or 'cancel' to stop the server.");
+-                    continue;
+-                }
+-
+-                switch (line.trim().toLowerCase(java.util.Locale.ROOT)) {
+-                    case "confirm" -> {
+-                        LOGGER.info("Continuing with startup world migration.");
+-                        return;
+-                    }
+-                    case "cancel" -> throw new RuntimeException("World migration cancelled by console input.");
+-                    default -> LOGGER.warn("Invalid migration response. Type 'confirm' to continue, or 'cancel' to stop the server.");
+-                }
++            LOGGER.warn("Migration delay disabled by system property.");
++        } else {
++            try {
++                Thread.sleep(30_000L);
++            } catch (final InterruptedException ex) {
++                Thread.currentThread().interrupt();
++                throw new RuntimeException("Interrupted while waiting before startup world migration", ex);
+             }
+-        } catch (final IOException ex) {
+-            throw new RuntimeException("Failed to read world migration confirmation from console", ex);
+         }
+-        // Leaf end - Forge-like startup world migration
++        LOGGER.info("Continuing with startup world migration.");
+     }
+ 
+     private static MigrationMode classifyStartupMigration(final WorldMigrationContext context) {
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftOfflinePlayer.java b/src/main/java/org/bukkit/craftbukkit/CraftOfflinePlayer.java
+index c2c3fe9a875c6dbcb194af3906bc1b11260a3303..b6bd37698ddf22a717a9044abcb3f1caf5836bf3 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftOfflinePlayer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftOfflinePlayer.java
+@@ -616,7 +616,7 @@ public class CraftOfflinePlayer implements OfflinePlayer, ConfigurationSerializa
+     @Override
+     public boolean isFlying() {
+         if (this.isOnline()) {
+-            return this.isFlying();
++            return this.getPlayer().isFlying(); // Pyzh - avoid recursing through the offline-player facade
+         } else {
+             CompoundTag data = this.getData();
+             if (data == null) return false;

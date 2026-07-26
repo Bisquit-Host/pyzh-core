@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 20 Jul 2026 08:51:45 +0300
+Subject: [PATCH] Preserve null keys in mushroom texture lookup
+
+
+diff --git a/src/main/java/org/bukkit/material/types/MushroomBlockTexture.java b/src/main/java/org/bukkit/material/types/MushroomBlockTexture.java
+index a9e61fc7a2b33f7f81f7d943a7a75db495f3b69b..09b5c0ea408571832918c563704a72a2ebf5d038 100644
+--- a/src/main/java/org/bukkit/material/types/MushroomBlockTexture.java
++++ b/src/main/java/org/bukkit/material/types/MushroomBlockTexture.java
+@@ -68,6 +68,7 @@ public enum MushroomBlockTexture {
+     // Leaf start - Replace data maps with optimized collection
+     private static final it.unimi.dsi.fastutil.bytes.Byte2ReferenceMap<MushroomBlockTexture> BY_DATA = new it.unimi.dsi.fastutil.bytes.Byte2ReferenceOpenHashMap<>();
+     private static final Map<BlockFace, MushroomBlockTexture> BY_BLOCKFACE = new java.util.EnumMap<>(BlockFace.class);
++    private static MushroomBlockTexture nullBlockFace;
+     // Leaf end - Replace data maps with optimized collection
+ 
+     private final Byte data;
+@@ -124,13 +125,17 @@ public enum MushroomBlockTexture {
+      */
+     @Nullable
+     public static MushroomBlockTexture getCapByFace(@Nullable final BlockFace face) {
+-        return BY_BLOCKFACE.get(face);
++        return face == null ? nullBlockFace : BY_BLOCKFACE.get(face);
+     }
+ 
+     static {
+         for (MushroomBlockTexture type : values()) {
+             BY_DATA.put(type.data, type);
+-            BY_BLOCKFACE.put(type.capFace, type);
++            if (type.capFace == null) {
++                nullBlockFace = type;
++            } else {
++                BY_BLOCKFACE.put(type.capFace, type);
++            }
+         }
+     }
+ }

@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 20 Jul 2026 08:47:50 +0300
+Subject: [PATCH] Apply Pyzh runtime branding
+
+
+diff --git a/src/main/java/io/papermc/paper/PaperServerInternalAPIBridge.java b/src/main/java/io/papermc/paper/PaperServerInternalAPIBridge.java
+index b791bbfb838c067d33f88f2063c0d6d6a6c892ef..4bd8aea01531da9867807ad74af2c87560a027c4 100644
+--- a/src/main/java/io/papermc/paper/PaperServerInternalAPIBridge.java
++++ b/src/main/java/io/papermc/paper/PaperServerInternalAPIBridge.java
+@@ -181,7 +181,7 @@ public class PaperServerInternalAPIBridge implements InternalAPIBridge {
+ 
+     @Override
+     public VersionFetcher getVersionFetcher() {
+-        return new org.dreeam.leaf.version.LeafVersionFetcher(); // Leaf - Rebrand
++        return new ru.turbovadim.pyzh.version.PyzhVersionFetcher(); // Pyzh - Rebrand
+     }
+ 
+     @Override
+diff --git a/src/main/java/io/papermc/paper/ServerBuildInfoImpl.java b/src/main/java/io/papermc/paper/ServerBuildInfoImpl.java
+index ca846f76d5ff53c547e1ce943e4e68cf4d5aa046..1951423ffb585d085730c15f6ceb2117f0ea0509 100644
+--- a/src/main/java/io/papermc/paper/ServerBuildInfoImpl.java
++++ b/src/main/java/io/papermc/paper/ServerBuildInfoImpl.java
+@@ -37,6 +37,7 @@ public record ServerBuildInfoImpl(
+     private static final String BRAND_PURPUR_NAME = "Purpur";
+     private static final String BRAND_LEAF_NAME = "Leaf";
+     // Leaf end - Rebrand
++    private static final String BRAND_PYZH_NAME = "Pyzh"; // Pyzh - Rebrand
+ 
+     private static final String BUILD_DEV = "DEV";
+ 
+@@ -48,9 +49,9 @@ public record ServerBuildInfoImpl(
+         this(
+             getManifestAttribute(manifest, ATTRIBUTE_BRAND_ID)
+                 .map(Key::key)
+-                .orElse(BRAND_LEAF_ID), // Gale - branding changes // Leaf - Rebrand
++                .orElse(BRAND_PYZH_ID), // Pyzh - Rebrand
+             getManifestAttribute(manifest, ATTRIBUTE_BRAND_NAME)
+-                .orElse(BRAND_LEAF_NAME), // Gale - branding changes // Leaf - Rebrand
++                .orElse(BRAND_PYZH_NAME), // Pyzh - Rebrand
+             SharedConstants.getCurrentVersion().id(),
+             SharedConstants.getCurrentVersion().name(),
+             getManifestAttribute(manifest, ATTRIBUTE_BUILD_NUMBER)
+@@ -72,7 +73,8 @@ public record ServerBuildInfoImpl(
+             || brandId.equals(BRAND_PAPER_ID)
+             || brandId.equals(BRAND_GALE_ID) // Gale - branding changes
+             || brandId.equals(BRAND_PUFFERFISH_ID)
+-            || brandId.equals(BRAND_PURPUR_ID);
++            || brandId.equals(BRAND_PURPUR_ID)
++            || brandId.equals(BRAND_LEAF_ID); // Pyzh - Rebrand
+             // Leaf end - Rebrand
+     }
+ 

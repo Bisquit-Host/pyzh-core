@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Thu, 23 Jul 2026 00:51:02 +0300
+Subject: [PATCH] Filter Bukkit nearby entity queries during collection
+
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
+index 615d115b5490799233078b32a128b3c01865a4aa..9bb0d58be45b82019540ad7ac8e80fec1ab0b17e 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
+@@ -3,7 +3,6 @@ package org.bukkit.craftbukkit;
+ import ca.spottedleaf.moonrise.common.list.ReferenceList;
+ import ca.spottedleaf.moonrise.common.util.CoordinateUtils;
+ import com.google.common.base.Preconditions;
+-import com.google.common.base.Predicates;
+ import com.google.common.collect.Lists;
+ import com.mojang.datafixers.util.Pair;
+ import io.papermc.paper.FeatureHooks;
+@@ -985,21 +984,73 @@ public class CraftWorld extends CraftRegionAccessor implements World {
+ 
+     @Override
+     public Collection<Entity> getNearbyEntities(BoundingBox boundingBox, Predicate<? super Entity> filter) {
++        // Pyzh start - filter nearby entity queries during spatial collection
++        final List<net.minecraft.world.entity.Entity> entityList = this.getNearbyEntityHandles(boundingBox, null);
++        final List<Entity> bukkitEntityList = new ArrayList<>(entityList.size());
++
++        for (net.minecraft.world.entity.Entity entity : entityList) {
++            final Entity bukkitEntity = entity.getBukkitEntity();
++            if (filter == null || filter.test(bukkitEntity)) {
++                bukkitEntityList.add(bukkitEntity);
++            }
++        }
++
++        return bukkitEntityList;
++        // Pyzh end - filter nearby entity queries during spatial collection
++    }
++
++    // Pyzh start - filter nearby entity queries during spatial collection
++    private List<net.minecraft.world.entity.Entity> getNearbyEntityHandles(
++        BoundingBox boundingBox,
++        @Nullable Class<? extends Entity> bukkitType
++    ) {
+         org.spigotmc.AsyncCatcher.catchOp("getNearbyEntities"); // Spigot
+         Preconditions.checkArgument(boundingBox != null, "BoundingBox cannot be null");
+ 
+-        AABB bb = new AABB(boundingBox.getMinX(), boundingBox.getMinY(), boundingBox.getMinZ(), boundingBox.getMaxX(), boundingBox.getMaxY(), boundingBox.getMaxZ());
+-        List<net.minecraft.world.entity.Entity> entityList = this.getHandle().getEntities((net.minecraft.world.entity.Entity) null, bb, Predicates.alwaysTrue());
+-        List<Entity> bukkitEntityList = new ArrayList<org.bukkit.entity.Entity>(entityList.size());
++        final AABB bb = new AABB(boundingBox.getMinX(), boundingBox.getMinY(), boundingBox.getMinZ(), boundingBox.getMaxX(), boundingBox.getMaxY(), boundingBox.getMaxZ());
++        final Predicate<net.minecraft.world.entity.Entity> typeFilter = bukkitType == null || bukkitType == Entity.class
++            ? null
++            : entity -> bukkitType.isInstance(entity.getBukkitEntity());
++        return this.getHandle().getEntities((net.minecraft.world.entity.Entity)null, bb, typeFilter);
++    }
++    // Pyzh end - filter nearby entity queries during spatial collection
++
++    // Pyzh - diff on change: org.bukkit.World#getNearbyEntitiesByType - overrides the interface default
++    // so the type check runs during the spatial scan instead of building an intermediate list of every
++    // nearby entity first. Upstream changes to that default no longer reach us and must be mirrored here.
++    @Override
++    @SuppressWarnings("unchecked")
++    public <T extends Entity> Collection<T> getNearbyEntitiesByType(
++        @Nullable Class<? extends T> clazz,
++        Location location,
++        double xRadius,
++        double yRadius,
++        double zRadius,
++        @Nullable Predicate<? super T> filter
++    ) {
++        Preconditions.checkArgument(location != null, "Location cannot be null");
++        Preconditions.checkArgument(this.equals(location.getWorld()), "Location cannot be in a different world");
++
++        // Pyzh start - filter nearby entity queries during spatial collection
++        // The type check runs inside the scan: it only forces creation of the Bukkit wrapper (which the
++        // interface default did for every entity anyway) and never mutates entity storage.
++        // The plugin predicate is arbitrary third-party code - it may spawn, remove or teleport entities -
++        // so it is deliberately evaluated afterwards, where it cannot mutate a section mid-traversal.
++        final List<net.minecraft.world.entity.Entity> entityList = this.getNearbyEntityHandles(
++            BoundingBox.of(location, xRadius, yRadius, zRadius),
++            clazz
++        );
++        final List<T> result = new ArrayList<>(entityList.size());
+ 
+         for (net.minecraft.world.entity.Entity entity : entityList) {
+-            Entity bukkitEntity = entity.getBukkitEntity();
++            final T bukkitEntity = (T)entity.getBukkitEntity();
+             if (filter == null || filter.test(bukkitEntity)) {
+-                bukkitEntityList.add(bukkitEntity);
++                result.add(bukkitEntity);
+             }
+         }
+ 
+-        return bukkitEntityList;
++        return result;
++        // Pyzh end - filter nearby entity queries during spatial collection
+     }
+ 
+     @Override
+diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
+index e36424773b034d7002ee5453473ced16ca04fe60..ef15346de604f672d36b52185b2b35052eb81939 100644
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
+@@ -2,7 +2,6 @@ package org.bukkit.craftbukkit.entity;
+ 
+ import com.google.common.base.Function;
+ import com.google.common.base.Preconditions;
+-import com.google.common.base.Predicates;
+ import com.google.common.collect.ImmutableSet;
+ import com.google.common.collect.Lists;
+ import com.mojang.logging.LogUtils;
+@@ -403,7 +402,7 @@ public abstract class CraftEntity implements org.bukkit.entity.Entity {
+         Preconditions.checkState(!this.entity.generation, "Cannot get nearby entities during world generation");
+         org.spigotmc.AsyncCatcher.catchOp("getNearbyEntities"); // Spigot
+ 
+-        List<Entity> entities = this.getHandle().level().getEntities(this.entity, this.entity.getBoundingBox().inflate(x, y, z), Predicates.alwaysTrue());
++        List<Entity> entities = this.getHandle().level().getEntities(this.entity, this.entity.getBoundingBox().inflate(x, y, z), null); // Pyzh - avoid an always-true predicate in nearby entity queries
+         List<org.bukkit.entity.Entity> result = new java.util.ArrayList<>(entities.size());
+ 
+         for (Entity entity : entities) {

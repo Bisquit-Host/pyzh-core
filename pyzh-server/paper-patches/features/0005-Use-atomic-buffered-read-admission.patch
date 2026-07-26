@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 21 Jul 2026 03:35:30 +0300
+Subject: [PATCH] Use atomic buffered read admission
+
+Route buffered block reads through the world lifecycle gate so shutdown cannot strand a request.
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
+index 711874c5758ad168d58250eb919ade4831043494..97678ec493ff00a3514c819260afbd4b48972fba 100644
+--- a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
++++ b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
+@@ -115,12 +115,8 @@ public class CraftBlock implements Block {
+         java.util.concurrent.CompletableFuture<Object> future = new java.util.concurrent.CompletableFuture<>();
+ 
+         // Shutdown handling for async reads - start
+-        if (level.isShuttingDown()) {
+-            future.completeExceptionally(new IllegalStateException("World " + level.getWorld().getName() + " is shutting down. Cannot queue new buffered read: " + type));
+-        } else {
+-            org.dreeam.leaf.async.world.WorldReadRequest request = new org.dreeam.leaf.async.world.WorldReadRequest(type, params, future);
+-            level.asyncReadRequestQueue.offer(request); // Assumes queue exists on ServerLevel
+-        }
++        org.dreeam.leaf.async.world.WorldReadRequest request = new org.dreeam.leaf.async.world.WorldReadRequest(type, params, future);
++        level.enqueueAsyncReadRequest(request); // Pyzh - admission is atomic with world closure
+         // Shutdown handling for async reads - end
+ 
+         try {

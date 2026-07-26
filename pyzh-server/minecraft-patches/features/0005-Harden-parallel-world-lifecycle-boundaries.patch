@@ -1,0 +1,516 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 21 Jul 2026 04:40:00 +0300
+Subject: [PATCH] Harden parallel world lifecycle boundaries
+
+Bound world-owned state to worker threads, close shutdown races, refuse deadlocking respawns, and finish bounded entity lifecycle handling.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+index 3645ef969b8af3af4071c0685f569d3a343bcc57..4a42d7800f20fc9785c25e6a0bd7c006433464a6 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+@@ -968,7 +968,9 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+                 continue;
+             }
+ 
+-            if (entity.isExceedingDespawnTime(true)) {
++            if (entity.isExceedingDespawnTime(true) && this.canRemoveEntity(entity)) {
++                // Check eligibility before entering the virtual removal chain: rejected removals
++                // may otherwise drop inventories or clear living-entity state before setRemoved() refuses them.
+                 entity.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.DESPAWN);
+                 if (entity.isRemoved()) { // Pyzh - retry when chunk status temporarily prevents removal
+                     entity.leaf$isWeakLoaded = false;
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 42b26fc4f8d499a5a8cfc3b261d2f45315ee6359..1695f2971ad473cb2315ce7eea4d461c7fb8864c 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -990,6 +990,11 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+     }
+     public boolean saveAllChunks(final boolean silent, final boolean flush, final boolean force, final boolean close) {
+         // Paper end - add close param
++        if (close && org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
++            for (final ServerLevel level : this.getAllLevels()) {
++                level.shutdownTickExecutor();
++            }
++        }
+         this.saveGlobalData(flush); // Paper - move to saveGlobalData()
+         boolean result = false;
+ 
+@@ -999,12 +1004,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             }
+ 
+             level.save(null, flush, SharedConstants.DEBUG_DONT_SAVE_WORLD || level.noSave && !force, close); // Paper - add close param
+-            // Leaf start - SparklyPaper - parallel world ticking - Shutdown handling for async reads
+-            // Only prepare shutdown if 'close' is true, indicating this save is part of server shutdown
+-            if (close && org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
+-                level.prepareShutdown();
+-            }
+-            // Leaf end - SparklyPaper - parallel world ticking - Shutdown handling for async reads
+             result = true;
+         }
+ 
+@@ -1093,6 +1092,13 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         // Purpur end - UPnP Port Forwarding
+         // CraftBukkit start
+         if (this.server != null) {
++            // Pyzh start - unblock plugin tasks waiting on buffered world reads before waiting for them to stop
++            if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
++                for (final ServerLevel level : this.getAllLevels()) {
++                    level.prepareShutdown();
++                }
++            }
++            // Pyzh end - unblock plugin tasks waiting on buffered world reads before waiting for them to stop
+             this.server.spark.disable(); // Paper - spark
+             this.server.disablePlugins();
+             this.server.waitForAsyncTasksShutdown(); // Paper - Wait for Async Tasks during shutdown
+@@ -1134,12 +1140,14 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         }
+         // Paper end - rewrite chunk system
+ 
+-        this.saveAllChunks(false, true, false, true); // Paper - rewrite chunk system
+-
+-        // Pyzh start - finish accepted player and level saves before closing their storage
+-        org.dreeam.leaf.async.AsyncPlayerDataSaving.shutdownAndAwait();
+-        // Pyzh end - finish accepted player and level saves before closing their storage
+-        this.isSaving = false;
++        // Pyzh start - always finish accepted persistence work, even if world closing fails
++        try {
++            this.saveAllChunks(false, true, false, true); // Paper - rewrite chunk system
++        } finally {
++            org.dreeam.leaf.async.AsyncPlayerDataSaving.shutdownAndAwait();
++            this.isSaving = false;
++        }
++        // Pyzh end - always finish accepted persistence work, even if world closing fails
+         this.savedDataStorage.close();
+         this.resources.close();
+ 
+@@ -1173,6 +1181,28 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         // Paper end - Improved watchdog support - move final shutdown items here
+     }
+ 
++    private void shutdownLeafExecutorsAfterStop() {
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
++            for (final ServerLevel level : this.getAllLevels()) {
++                try {
++                    level.shutdownTickExecutor();
++                } catch (final Throwable throwable) {
++                    LOGGER.error("Failed to shut down the tick executor for world {}", level.dimension().identifier(), throwable);
++                }
++            }
++        }
++        try {
++            org.dreeam.leaf.async.AsyncPlayerDataSaving.shutdownAndAwait();
++        } catch (final Throwable throwable) {
++            LOGGER.error("Failed to shut down asynchronous persistence", throwable);
++        }
++        try {
++            org.dreeam.leaf.async.ShutdownExecutors.shutdown(this);
++        } catch (final Throwable throwable) {
++            LOGGER.error("Failed to shut down Leaf executors", throwable);
++        }
++    }
++
+     public String getLocalIp() {
+         return this.localIp;
+     }
+@@ -1489,6 +1519,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             } catch (Throwable t) {
+                 LOGGER.error("Exception stopping the server", t);
+             } finally {
++                this.shutdownLeafExecutorsAfterStop(); // Pyzh - do not strand non-daemon workers after a failed stop
+                 //this.onServerExit(); // Paper - Improved watchdog support; moved into stop
+             }
+         }
+@@ -1872,6 +1903,16 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+ 
+     // Leaf start - SparklyPaper - parallel world ticking - move level ticking logic out for branch convergence
+     private void tickLevel(final ServerLevel level, final BooleanSupplier haveTime) {
++        final boolean profileWorkerTick = org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled;
++        final ProfilerFiller profiler = Profiler.get();
++        if (profileWorkerTick) {
++            profiler.push(() -> level + " " + level.dimension().identifier());
++            profiler.push("tick");
++        }
++        net.minecraft.world.level.block.entity.HopperBlockEntity.setSkipHopperEvents(
++            level.paperConfig().hopper.disableMoveEvent
++                || org.bukkit.event.inventory.InventoryMoveItemEvent.getHandlerList().getRegisteredListeners().length == 0
++        );
+         try {
+             long levelTickStart = Util.getNanos(); // SparklyPaper - track world's MSPT
+             level.tick(haveTime);
+@@ -1887,6 +1928,12 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             CrashReport report = CrashReport.forThrowable(t, "Exception ticking world");
+             level.fillReportDetails(report);
+             throw new ReportedException(report);
++        } finally {
++            level.explosionDensityCache.clear(); // Paper - Optimize explosions
++            if (profileWorkerTick) {
++                profiler.pop();
++                profiler.pop();
++            }
+         }
+     }
+     // Leaf end - SparklyPaper - parallel world ticking - move level ticking logic out for branch convergence
+@@ -1945,6 +1992,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         record WorldTickTask(ServerLevel level, java.util.concurrent.Future<?> future) {}
+         java.util.ArrayDeque<WorldTickTask> tasks = new java.util.ArrayDeque<>();
+         Throwable tickFailure = null;
++        java.lang.InterruptedException tickInterruption = null;
+         boolean interrupted = false;
+         try {
+             for (ServerLevel level : this.getAllLevels()) {
+@@ -1952,7 +2000,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+                 level.hasEntityMoveEvent = io.papermc.paper.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - Add EntityMoveEvent
+                 level.hasRidableMoveEvent = org.purpurmc.purpur.event.entity.RidableMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Purpur - Ridables
+                 level.updateLagCompensationTick(); // Paper - lag compensation
+-                net.minecraft.world.level.block.entity.HopperBlockEntity.skipHopperEvents = level.paperConfig().hopper.disableMoveEvent || org.bukkit.event.inventory.InventoryMoveItemEvent.getHandlerList().getRegisteredListeners().length == 0; // Paper - Perf: Optimize Hoppers
+                 profiler.push(() -> level + " " + level.dimension().identifier());
+                 profiler.push("tick");
+ 
+@@ -1982,10 +2029,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+ 
+                 profiler.pop();
+                 profiler.pop();
+-                level.explosionDensityCache.clear(); // Paper - Optimize explosions
+             }
+         } catch (java.lang.InterruptedException ex) {
+-            tickFailure = ex;
++            tickInterruption = ex;
+             interrupted = true;
+         } catch (Throwable throwable) {
+             tickFailure = throwable;
+@@ -1999,10 +2045,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+                         completed = true;
+                     } catch (java.lang.InterruptedException ex) {
+                         interrupted = true;
+-                        if (tickFailure == null) {
+-                            tickFailure = ex;
++                        if (tickInterruption == null) {
++                            tickInterruption = ex;
+                         } else {
+-                            tickFailure.addSuppressed(ex);
++                            tickInterruption.addSuppressed(ex);
+                         }
+                     } catch (java.util.concurrent.ExecutionException ex) {
+                         completed = true;
+@@ -2021,6 +2067,13 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+                 Thread.currentThread().interrupt();
+             }
+         }
++        if (tickInterruption != null) {
++            if (tickFailure == null) {
++                tickFailure = tickInterruption;
++            } else if (tickFailure != tickInterruption) {
++                tickFailure.addSuppressed(tickInterruption);
++            }
++        }
+         if (tickFailure instanceof RuntimeException runtimeException) {
+             throw runtimeException;
+         }
+@@ -2125,7 +2178,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         Map<ResourceKey<Level>, ServerLevel> oldLevels = this.levels;
+         Map<ResourceKey<Level>, ServerLevel> newLevels = Maps.newLinkedHashMap(oldLevels);
+         newLevels.remove(level.dimension());
+-        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) level.tickExecutor.shutdown(); // Leaf - SparklyPaper - parallel world ticking (We remove it in here instead of ServerLevel.close() because ServerLevel.close() is never called!)
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) level.shutdownTickExecutor(); // Pyzh - close admission and await the world tick worker
+         if (org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled) { level.leaf$asyncTracker.onTickEnd(); } // Leaf - Multithreaded tracker
+         this.levels = Collections.unmodifiableMap(newLevels);
+     }
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 9932c13fc4c59cab0fc83ef0f3683f68e4447062..cf4356521f8f91dbcc1cd207499343f7e947fd38 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -906,19 +906,45 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+             MinecraftServer.LOGGER.info("PWT: Cleared {} pending async read requests for world {} during shutdown.", clearedRequests, this.getWorld().getName());
+         }
+     }
++
++    public void shutdownTickExecutor() {
++        if (this.tickExecutor == null) {
++            return;
++        }
++        if (Thread.currentThread() instanceof ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread tickThread && tickThread.currentTickingServerLevel == this) {
++            throw new IllegalStateException("Cannot unload world " + this.getWorld().getName() + " from its own tick thread");
++        }
++
++        this.prepareShutdown();
++        this.tickExecutor.shutdown();
++        boolean interrupted = false;
++        while (!this.tickExecutor.isTerminated()) {
++            try {
++                if (!this.tickExecutor.awaitTermination(30L, java.util.concurrent.TimeUnit.SECONDS)) {
++                    MinecraftServer.LOGGER.warn("Still waiting for the tick executor of world {} to terminate", this.getWorld().getName());
++                }
++            } catch (final InterruptedException ex) {
++                interrupted = true;
++            }
++        }
++        if (interrupted) {
++            Thread.currentThread().interrupt();
++        }
++    }
+     // Leaf end - SparklyPaper - parallel world ticking - Shutdown handling for async reads
+ 
+     // Leaf start - SparklyPaper - parallel world ticking
+     private void processAsyncReadRequests() {
+-        // Clear queue if buffering gets disabled to prevent memory leaks
+-        if (org.dreeam.leaf.async.world.UnsafeReadPolicy.BUFFERED != org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.asyncUnsafeReadHandling) {
+-            synchronized (this.asyncReadRequestLifecycleLock) {
++        // Read the reloadable policy under the same lock used by admission so a stale
++        // DISABLED value cannot reject requests admitted after BUFFERED was enabled.
++        synchronized (this.asyncReadRequestLifecycleLock) {
++            if (org.dreeam.leaf.async.world.UnsafeReadPolicy.BUFFERED != org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.asyncUnsafeReadHandling) {
+                 org.dreeam.leaf.async.world.WorldReadRequest req;
+                 while ((req = this.asyncReadRequestQueue.poll()) != null) {
+                     req.future().completeExceptionally(new IllegalStateException("Async read buffering disabled while request was pending."));
+                 }
++                return;
+             }
+-            return;
+         }
+ 
+         org.dreeam.leaf.async.world.WorldReadRequest request;
+diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
+index 6469a2b443373854b98912485b8592dc03abdcee..30cdd622c355410d72416bc4ce379e18b278150b 100644
+--- a/net/minecraft/server/players/PlayerList.java
++++ b/net/minecraft/server/players/PlayerList.java
+@@ -788,10 +788,13 @@ public abstract class PlayerList {
+     // Paper start - respawn event
+     public ServerPlayer respawn(final ServerPlayer serverPlayer, final boolean keepAllPlayerData, final Entity.RemovalReason removalReason, final org.bukkit.event.player.PlayerRespawnEvent.RespawnReason respawnReason) {
+         // Leaf start - SparklyPaper - parallel world ticking
+-        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled && !this.server.isSameThread()) {
+-            // Respawning is a complex operation that modifies global player lists and can interact with multiple
+-            // worlds. It must be executed on the main server thread to ensure thread safety. We block the
+-            // calling (world) thread to wait for the result, preserving the synchronous API contract of this method.
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled
++            && Thread.currentThread() != this.server.getRunningThread()) {
++            // The main thread waits for every world future, so a blocking handoff from a world
++            // worker would deadlock. Other asynchronous callers can still hand off safely.
++            if (Thread.currentThread() instanceof ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread) {
++                throw new IllegalStateException("Cannot synchronously respawn a player from a parallel world tick thread");
++            }
+             return this.server.submit(() -> this.respawn(serverPlayer, keepAllPlayerData, removalReason, respawnReason)).join();
+         }
+         // Leaf end - SparklyPaper - parallel world ticking
+diff --git a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
+index 6771734e46b44a36fa31d8842a1c123290d94619..4674cc3b089f0e4f01d293de153800305e19c6f1 100644
+--- a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
++++ b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
+@@ -137,18 +137,8 @@ public class WanderingTraderSpawner implements CustomSpawner {
+             int yPosition = level.getHeight(SpawnPlacements.getHeightmapType(EntityTypes.WANDERING_TRADER), xPosition, zPosition);
+             // Purpur start - Allow toggling special MobSpawners per world - allow traders to spawn below nether roof
+             BlockPos.MutableBlockPos spawnPos = new BlockPos.MutableBlockPos(xPosition, yPosition, zPosition);
+-            if (level.dimensionType().hasCeiling()) {
+-                final int minY = level.getMinY();
+-                while (spawnPos.getY() > minY && !level.getBlockState(spawnPos).isAir()) {
+-                    spawnPos.move(net.minecraft.core.Direction.DOWN);
+-                }
+-                while (spawnPos.getY() > minY && level.getBlockState(spawnPos).isAir()) {
+-                    spawnPos.move(net.minecraft.core.Direction.DOWN);
+-                }
+-                if (level.getBlockState(spawnPos).isAir()) {
+-                    continue; // Pyzh - no floor exists within the dimension bounds
+-                }
+-                spawnPos.move(net.minecraft.core.Direction.UP);
++            if (level.dimensionType().hasCeiling() && !findSpawnBelowCeiling(level, spawnPos)) {
++                continue;
+             }
+             // Purpur end - Allow toggling special MobSpawners per world
+             if (wanderingTraderSpawnType.isSpawnPositionOk(level, spawnPos, EntityTypes.WANDERING_TRADER)) {
+@@ -160,6 +150,36 @@ public class WanderingTraderSpawner implements CustomSpawner {
+         return spawnPosition;
+     }
+ 
++    static boolean findSpawnBelowCeiling(final LevelReader level, final BlockPos.MutableBlockPos spawnPos) {
++        final int minY = level.getMinY();
++
++        // Move from the heightmap position onto the roof, through it into the
++        // interior, and then down to the first floor. Every scan is bounded.
++        while (spawnPos.getY() > minY && level.getBlockState(spawnPos).isAir()) {
++            spawnPos.move(net.minecraft.core.Direction.DOWN);
++        }
++        if (level.getBlockState(spawnPos).isAir()) {
++            return false;
++        }
++
++        while (spawnPos.getY() > minY && !level.getBlockState(spawnPos).isAir()) {
++            spawnPos.move(net.minecraft.core.Direction.DOWN);
++        }
++        if (!level.getBlockState(spawnPos).isAir()) {
++            return false;
++        }
++
++        while (spawnPos.getY() > minY && level.getBlockState(spawnPos).isAir()) {
++            spawnPos.move(net.minecraft.core.Direction.DOWN);
++        }
++        if (level.getBlockState(spawnPos).isAir()) {
++            return false;
++        }
++
++        spawnPos.move(net.minecraft.core.Direction.UP);
++        return spawnPos.getY() <= level.getMaxY();
++    }
++
+     private boolean hasEnoughSpace(final BlockGetter level, final BlockPos spawnPos) {
+         for (BlockPos pos : BlockPos.betweenClosed(spawnPos, spawnPos.offset(1, 2, 1))) {
+             if (!level.getBlockState(pos).getCollisionShape(level, pos).isEmpty()) {
+diff --git a/net/minecraft/world/level/block/entity/BlockEntity.java b/net/minecraft/world/level/block/entity/BlockEntity.java
+index 21afe18cc81c4f2cba98988d6acd0567b04d3d08..ecd43356ad288341322caf37f4ae55d813e186b2 100644
+--- a/net/minecraft/world/level/block/entity/BlockEntity.java
++++ b/net/minecraft/world/level/block/entity/BlockEntity.java
+@@ -39,7 +39,7 @@ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
+ 
+ public abstract class BlockEntity implements DebugValueSource, TypedInstance<BlockEntityType<?>>, net.caffeinemc.mods.lithium.common.block.entity.inventory_comparator_tracking.ComparatorTracker, net.caffeinemc.mods.lithium.common.block.entity.SetBlockStateHandlingBlockEntity, net.caffeinemc.mods.lithium.common.block.entity.SetChangedHandlingBlockEntity { // Leaves - Lithium Sleeping Block Entity
+-    static boolean ignoreBlockEntityUpdates; // Paper - Perf: Optimize Hoppers
++    static final ThreadLocal<Boolean> IGNORE_BLOCK_ENTITY_UPDATES = ThreadLocal.withInitial(() -> false); // Paper - Perf: Optimize Hoppers
+     // CraftBukkit start - data containers
+     private static final org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry DATA_TYPE_REGISTRY = new org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry();
+     public final org.bukkit.craftbukkit.persistence.CraftPersistentDataContainer persistentDataContainer;
+@@ -220,7 +220,7 @@ public abstract class BlockEntity implements DebugValueSource, TypedInstance<Blo
+ 
+     public void setChanged() {
+         if (this.level != null) {
+-            if (ignoreBlockEntityUpdates) return; // Paper - Perf: Optimize Hoppers
++            if (IGNORE_BLOCK_ENTITY_UPDATES.get()) return; // Paper - Perf: Optimize Hoppers
+             setChanged(this.level, this.worldPosition, this.blockState);
+             if (org.dreeam.leaf.config.modules.opt.SleepingBlockEntity.enabled) lithium$handleSetChanged(); // Leaves - Lithium Sleeping Block Entity
+         }
+diff --git a/net/minecraft/world/level/block/entity/HopperBlockEntity.java b/net/minecraft/world/level/block/entity/HopperBlockEntity.java
+index f70b842035582b71f4322bae850c157bf4b8ef8e..8e035ec26e0e10c0cc1bc6ca82a997f526a41959 100644
+--- a/net/minecraft/world/level/block/entity/HopperBlockEntity.java
++++ b/net/minecraft/world/level/block/entity/HopperBlockEntity.java
+@@ -228,12 +228,16 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+     }
+ 
+     // Paper start - Perf: Optimize Hoppers
+-    public static boolean skipHopperEvents;
+-    private static boolean skipPullModeEventFire;
+-    private static boolean skipPushModeEventFire;
++    private static final ThreadLocal<Boolean> SKIP_HOPPER_EVENTS = ThreadLocal.withInitial(() -> false);
++    private static final ThreadLocal<Boolean> SKIP_PULL_MODE_EVENT_FIRE = ThreadLocal.withInitial(() -> false);
++    private static final ThreadLocal<Boolean> SKIP_PUSH_MODE_EVENT_FIRE = ThreadLocal.withInitial(() -> false);
++
++    public static void setSkipHopperEvents(final boolean skipHopperEvents) {
++        SKIP_HOPPER_EVENTS.set(skipHopperEvents);
++    }
+ 
+     private static boolean hopperPush(final Level level, final Container destination, final Direction direction, final HopperBlockEntity hopper) {
+-        skipPushModeEventFire = skipHopperEvents;
++        SKIP_PUSH_MODE_EVENT_FIRE.set(SKIP_HOPPER_EVENTS.get());
+         boolean foundItem = false;
+         for (int i = 0; i < hopper.getContainerSize(); ++i) {
+             final ItemStack item = hopper.getItem(i);
+@@ -248,7 +252,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+ 
+                 // We only need to fire the event once to give protection plugins a chance to cancel this event
+                 // Because nothing uses getItem, every event call should end up the same result.
+-                if (!skipPushModeEventFire) {
++                if (!SKIP_PUSH_MODE_EVENT_FIRE.get()) {
+                     movedItem = callPushMoveEvent(destination, movedItem, hopper);
+                     if (movedItem == null) { // cancelled
+                         origItemStack.setCount(originalItemCount);
+@@ -283,7 +287,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+         final int movedItemCount = Math.min(level.spigotConfig.hopperAmount, originalItemCount);
+         // Leaves start - Vanilla hopper
+         if (org.dreeam.leaf.config.modules.gameplay.VanillaHopper.enabled && movedItem.getCount() <= movedItemCount) {
+-            if (!skipPullModeEventFire) {
++            if (!SKIP_PULL_MODE_EVENT_FIRE.get()) {
+                 movedItem = callPullMoveEvent(hopper, container, movedItem);
+                 if (movedItem == null) { // cancelled
+                     origItemStack.setCount(originalItemCount);
+@@ -304,7 +308,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+             container.setChanged(); // original logic always marks source inv as changed even if no move happens.
+             movedItem.setCount(movedItemCount);
+ 
+-            if (!skipPullModeEventFire) {
++            if (!SKIP_PULL_MODE_EVENT_FIRE.get()) {
+                 movedItem = callPullMoveEvent(hopper, container, movedItem);
+                 if (movedItem == null) { // cancelled
+                     origItemStack.setCount(originalItemCount);
+@@ -324,9 +328,12 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+                     origItemStack.setCount(originalItemCount - movedItemCount + remainingItemCount);
+                 }
+ 
+-                ignoreBlockEntityUpdates = true;
+-                container.setItem(i, origItemStack);
+-                ignoreBlockEntityUpdates = false;
++                IGNORE_BLOCK_ENTITY_UPDATES.set(true);
++                try {
++                    container.setItem(i, origItemStack);
++                } finally {
++                    IGNORE_BLOCK_ENTITY_UPDATES.set(false);
++                }
+                 container.setChanged();
+                 return true;
+             }
+@@ -352,7 +359,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+         );
+         final boolean result = event.callEvent();
+         if (!event.calledGetItem && !event.calledSetItem) {
+-            skipPushModeEventFire = true;
++            SKIP_PUSH_MODE_EVENT_FIRE.set(true);
+         }
+         if (!result) {
+             applyCooldown(hopper);
+@@ -375,7 +382,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+         final io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent event = new io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent(sourceInventory, org.bukkit.craftbukkit.inventory.CraftItemStack.asCraftMirror(itemstack), destination, false);
+         final boolean result = event.callEvent();
+         if (!event.calledGetItem && !event.calledSetItem) {
+-            skipPullModeEventFire = true;
++            SKIP_PULL_MODE_EVENT_FIRE.set(true);
+         }
+         if (!result) {
+             applyCooldown(hopper);
+@@ -522,7 +529,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+         Container container = org.dreeam.leaf.config.modules.opt.SleepingBlockEntity.enabled ? getExtractInventory(level, hopper, blockPos, blockState) : getSourceContainer(level, hopper, blockPos, blockState); // Leaves - Lithium Sleeping Block Entity
+         if (container != null) {
+             Direction direction = Direction.DOWN;
+-            skipPullModeEventFire = skipHopperEvents; // Paper - Perf: Optimize Hoppers
++            SKIP_PULL_MODE_EVENT_FIRE.set(SKIP_HOPPER_EVENTS.get()); // Paper - Perf: Optimize Hoppers
+             // Leaves start - Lithium Sleeping Block Entity
+             if (org.dreeam.leaf.config.modules.opt.SleepingBlockEntity.enabled) {
+                 Boolean res = lithiumExtract(level, hopper, container);
+@@ -634,9 +641,12 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+                     itemStack = itemStack.split(container.getMaxStackSize());
+                 }
+                 // Spigot end
+-                ignoreBlockEntityUpdates = true; // Paper - Perf: Optimize Hoppers
+-                container.setItem(slot, itemStack);
+-                ignoreBlockEntityUpdates = false; // Paper - Perf: Optimize Hoppers
++                IGNORE_BLOCK_ENTITY_UPDATES.set(true); // Paper - Perf: Optimize Hoppers
++                try {
++                    container.setItem(slot, itemStack);
++                } finally {
++                    IGNORE_BLOCK_ENTITY_UPDATES.set(false); // Paper - Perf: Optimize Hoppers
++                }
+                 itemStack = leftover; // Paper - Make hoppers respect inventory max stack size
+                 success = true;
+             } else if (canMergeItems(current, itemStack)) {
+@@ -1499,7 +1509,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+                 hopperBlockEntity.insertStackList.getOccupiedSlots() == 0 :
+                 insertInventory.isEmpty();
+ 
+-        skipPushModeEventFire = skipHopperEvents;
++        SKIP_PUSH_MODE_EVENT_FIRE.set(SKIP_HOPPER_EVENTS.get());
+         //noinspection ConstantConditions
+         if (!(hopperBlockEntity.insertInventory == insertInventory && hopperBlockEntity.insertStackList.getFullSlots() == hopperBlockEntity.insertStackList.size())) {
+             Direction fromDirection = hopperBlockEntity.facing.getOpposite();
+@@ -1507,7 +1517,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+             for (int i = 0; i < size; ++i) {
+                 ItemStack transferStack = hopperStackList.get(i);
+                 if (!transferStack.isEmpty()) {
+-                    if (!skipPushModeEventFire && canTakeItemFromContainer(insertInventory, hopperBlockEntity, transferStack, i, Direction.DOWN)) {
++                    if (!SKIP_PUSH_MODE_EVENT_FIRE.get() && canTakeItemFromContainer(insertInventory, hopperBlockEntity, transferStack, i, Direction.DOWN)) {
+                         transferStack = callPushMoveEvent(insertInventory, transferStack, hopperBlockEntity);
+                         if (transferStack == null) { // cancelled
+                             break;
+@@ -1567,7 +1577,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+             int fromSlot = availableSlots != null ? availableSlots[i] : i;
+             ItemStack itemStack = fromStackList.get(fromSlot);
+             if (!itemStack.isEmpty() && canTakeItemFromContainer(to, from, itemStack, fromSlot, Direction.DOWN)) {
+-                if (!skipPullModeEventFire) {
++                if (!SKIP_PULL_MODE_EVENT_FIRE.get()) {
+                     itemStack = callPullMoveEvent(to, from, itemStack);
+                     if (itemStack == null) { // cancelled
+                         return true;

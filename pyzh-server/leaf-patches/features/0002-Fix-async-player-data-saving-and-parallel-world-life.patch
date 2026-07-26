@@ -1,0 +1,344 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 26 Jul 2026 02:51:16 +0300
+Subject: [PATCH] Fix async player data saving and parallel world lifecycle
+
+
+diff --git a/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java b/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java
+index 7b423a401263c8a61b19dbc5c13cb9952a7b09b9..f969cdd81d3e4310e851f236180e7a0e5c3723ce 100644
+--- a/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java
++++ b/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java
+@@ -1,48 +1,202 @@
+ package org.dreeam.leaf.async;
+ 
+ import net.minecraft.util.Util;
++import org.apache.logging.log4j.LogManager;
++import org.apache.logging.log4j.Logger;
+ import org.dreeam.leaf.config.modules.async.AsyncPlayerDataSave;
+ 
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.HashMap;
++import java.util.Map;
+ import java.util.Optional;
++import java.util.UUID;
++import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.ExecutionException;
+ import java.util.concurrent.ExecutorService;
+-import java.util.concurrent.Future;
+ import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.RejectedExecutionException;
+ import java.util.concurrent.ThreadPoolExecutor;
+ import java.util.concurrent.TimeUnit;
++import java.util.concurrent.TimeoutException;
++import java.util.concurrent.atomic.AtomicInteger;
+ 
+-public class AsyncPlayerDataSaving {
++public final class AsyncPlayerDataSaving {
+ 
+-    public static ExecutorService IO_POOL = null;
++    private static final Logger LOGGER = LogManager.getLogger("Leaf");
++    private static final Object LIFECYCLE_LOCK = new Object();
++    private static final Map<UUID, PlayerSaveState> PLAYER_SAVES = new HashMap<>();
++    private static final AtomicInteger PLAYER_THREAD_COUNTER = new AtomicInteger();
++    private static ExecutorService playerIoPool;
++    private static ExecutorService levelIoPool;
++    private static CompletableFuture<Void> levelTail = CompletableFuture.completedFuture(null);
++    private static boolean accepting;
+ 
+     private AsyncPlayerDataSaving() {
+     }
+ 
+     public static void init() {
+-        if (IO_POOL == null) {
+-            IO_POOL = new ThreadPoolExecutor(
+-                1,
+-                1,
+-                0L, TimeUnit.MILLISECONDS,
+-                new LinkedBlockingQueue<>(),
+-                new com.google.common.util.concurrent.ThreadFactoryBuilder()
+-                    .setPriority(Thread.NORM_PRIORITY - 2)
+-                    .setNameFormat("Leaf IO Thread")
+-                    .setUncaughtExceptionHandler(Util::onThreadException)
+-                    .build(),
+-                new ThreadPoolExecutor.DiscardPolicy()
+-            );
+-        } else {
+-            // Temp no-op
+-            //throw new IllegalStateException();
+-        }
+-    }
+-
+-    public static Optional<Future<?>> submit(Runnable runnable) {
++        synchronized (LIFECYCLE_LOCK) {
++            if (playerIoPool != null) {
++                return;
++            }
++
++            playerIoPool = createPool(1, runnable -> new Thread(runnable, "Leaf Player IO Thread-" + PLAYER_THREAD_COUNTER.incrementAndGet()));
++            levelIoPool = createPool(1, runnable -> new Thread(runnable, "Leaf Level IO Thread"));
++            accepting = true;
++        }
++    }
++
++    private static ExecutorService createPool(final int threads, final java.util.function.Function<Runnable, Thread> threadFactory) {
++        return new ThreadPoolExecutor(
++            threads,
++            threads,
++            0L,
++            TimeUnit.MILLISECONDS,
++            new LinkedBlockingQueue<>(),
++            runnable -> {
++                final Thread thread = threadFactory.apply(runnable);
++                thread.setPriority(Thread.NORM_PRIORITY - 2);
++                thread.setUncaughtExceptionHandler(Util::onThreadException);
++                return thread;
++            },
++            new ThreadPoolExecutor.AbortPolicy()
++        );
++    }
++
++    public static CompletableFuture<Void> submitPlayer(final UUID uniqueId, final byte[] encodedData, final java.util.function.Consumer<byte[]> writer) {
++        final byte[] snapshot = Arrays.copyOf(encodedData, encodedData.length);
+         if (!AsyncPlayerDataSave.enabled) {
+-            runnable.run();
+-            return Optional.empty();
+-        } else {
+-            return Optional.of(IO_POOL.submit(runnable));
++            return runSynchronously(() -> writer.accept(snapshot));
++        }
++
++        final CompletableFuture<Void> next;
++        synchronized (LIFECYCLE_LOCK) {
++            if (!accepting || playerIoPool == null) {
++                return CompletableFuture.failedFuture(new RejectedExecutionException("Player data saving is shutting down"));
++            }
++
++            final PlayerSaveState state = PLAYER_SAVES.computeIfAbsent(uniqueId, ignored -> new PlayerSaveState());
++            final CompletableFuture<Void> previous = state.tail;
++            next = (previous == null ? CompletableFuture.<Void>completedFuture(null) : previous.handle((ignored, throwable) -> null))
++                .thenRunAsync(() -> writer.accept(snapshot), playerIoPool);
++            state.latestSnapshot = snapshot;
++            state.tail = next;
++        }
++
++        next.whenComplete((ignored, throwable) -> {
++            synchronized (LIFECYCLE_LOCK) {
++                final PlayerSaveState state = PLAYER_SAVES.get(uniqueId);
++                if (state != null && state.tail == next) {
++                    PLAYER_SAVES.remove(uniqueId);
++                }
++            }
++        });
++        return next;
++    }
++
++    public static CompletableFuture<Void> submitLevel(final Runnable writer) {
++        if (!AsyncPlayerDataSave.enabled) {
++            return runSynchronously(writer);
++        }
++
++        synchronized (LIFECYCLE_LOCK) {
++            if (!accepting || levelIoPool == null) {
++                return CompletableFuture.failedFuture(new RejectedExecutionException("Level data saving is shutting down"));
++            }
++
++            levelTail = levelTail.handle((ignored, throwable) -> null).thenRunAsync(writer, levelIoPool);
++            return levelTail;
++        }
++    }
++
++    public static Optional<byte[]> getPendingPlayerData(final UUID uniqueId) {
++        synchronized (LIFECYCLE_LOCK) {
++            final PlayerSaveState state = PLAYER_SAVES.get(uniqueId);
++            return state == null ? Optional.empty() : Optional.of(Arrays.copyOf(state.latestSnapshot, state.latestSnapshot.length));
++        }
++    }
++
++    public static void shutdownAndAwait() {
++        final CompletableFuture<Void> barrier;
++        final ExecutorService playerExecutor;
++        final ExecutorService levelExecutor;
++        synchronized (LIFECYCLE_LOCK) {
++            if (playerIoPool == null) {
++                return;
++            }
++
++            accepting = false;
++            final ArrayList<CompletableFuture<Void>> pending = new ArrayList<>(PLAYER_SAVES.size() + 1);
++            for (final PlayerSaveState state : PLAYER_SAVES.values()) {
++                if (state.tail != null) {
++                    pending.add(state.tail);
++                }
++            }
++            pending.add(levelTail);
++            barrier = CompletableFuture.allOf(pending.toArray(CompletableFuture[]::new));
++            playerExecutor = playerIoPool;
++            levelExecutor = levelIoPool;
+         }
++
++        awaitBarrier(barrier);
++        playerExecutor.shutdown();
++        levelExecutor.shutdown();
++        awaitTermination(playerExecutor, "player");
++        awaitTermination(levelExecutor, "level");
++    }
++
++    private static CompletableFuture<Void> runSynchronously(final Runnable writer) {
++        try {
++            writer.run();
++            return CompletableFuture.completedFuture(null);
++        } catch (Throwable throwable) {
++            return CompletableFuture.failedFuture(throwable);
++        }
++    }
++
++    private static void awaitBarrier(final CompletableFuture<Void> barrier) {
++        boolean interrupted = false;
++        while (true) {
++            try {
++                barrier.get(30L, TimeUnit.SECONDS);
++                break;
++            } catch (final InterruptedException ex) {
++                interrupted = true;
++            } catch (final TimeoutException ex) {
++                final int pendingPlayers;
++                synchronized (LIFECYCLE_LOCK) {
++                    pendingPlayers = PLAYER_SAVES.size();
++                }
++                LOGGER.warn("Still waiting for asynchronous persistence tasks to finish ({} player keys pending)", pendingPlayers);
++            } catch (final ExecutionException ex) {
++                LOGGER.error("An asynchronous persistence task failed during shutdown", ex.getCause() == null ? ex : ex.getCause());
++                break;
++            }
++        }
++        if (interrupted) {
++            Thread.currentThread().interrupt();
++        }
++    }
++
++    private static void awaitTermination(final ExecutorService executor, final String type) {
++        boolean interrupted = false;
++        while (!executor.isTerminated()) {
++            try {
++                if (!executor.awaitTermination(30L, TimeUnit.SECONDS)) {
++                    LOGGER.warn("Still waiting for the {} data I/O executor to terminate", type);
++                }
++            } catch (final InterruptedException ex) {
++                interrupted = true;
++            }
++        }
++        if (interrupted) {
++            Thread.currentThread().interrupt();
++        }
++    }
++
++    private static final class PlayerSaveState {
++        private CompletableFuture<Void> tail;
++        private byte[] latestSnapshot;
+     }
+ }
+diff --git a/java/org/dreeam/leaf/async/ShutdownExecutors.java b/java/org/dreeam/leaf/async/ShutdownExecutors.java
+index 501d135afd490c2ca278eb3842dbd3e7037c2aae..18a683c8ad9f2db3f21416c2835e5b006d52a03e 100644
+--- a/java/org/dreeam/leaf/async/ShutdownExecutors.java
++++ b/java/org/dreeam/leaf/async/ShutdownExecutors.java
+@@ -21,15 +21,6 @@ public class ShutdownExecutors {
+             }
+         }
+ 
+-        if (AsyncPlayerDataSaving.IO_POOL != null) {
+-            LOGGER.info("Waiting for player I/O executor to shutdown...");
+-            AsyncPlayerDataSaving.IO_POOL.shutdown();
+-            try {
+-                AsyncPlayerDataSaving.IO_POOL.awaitTermination(60L, TimeUnit.SECONDS);
+-            } catch (InterruptedException ignored) {
+-            }
+-        }
+-
+         if (AsyncTracker.TRACKER_EXECUTOR != null) {
+             LOGGER.info("Waiting for entity tracker executor to shutdown...");
+             AsyncTracker.TRACKER_EXECUTOR.shutdown();
+diff --git a/java/org/dreeam/leaf/config/modules/async/AsyncPlayerDataSave.java b/java/org/dreeam/leaf/config/modules/async/AsyncPlayerDataSave.java
+index c87908e2323bb7732b7b3d4ea094254054e0f31d..3e790aff014c452c232add40d570e31d639c13c8 100644
+--- a/java/org/dreeam/leaf/config/modules/async/AsyncPlayerDataSave.java
++++ b/java/org/dreeam/leaf/config/modules/async/AsyncPlayerDataSave.java
+@@ -10,6 +10,7 @@ public class AsyncPlayerDataSave extends ConfigModules {
+     }
+ 
+     public static boolean enabled = false;
++    private static boolean runtimeConfigurationInitialized;
+ 
+     @Override
+     public void onLoaded() {
+@@ -18,10 +19,15 @@ public class AsyncPlayerDataSave extends ConfigModules {
+             """
+                 异步保存玩家数据.""");
+ 
+-        enabled = config.getBoolean(getBasePath() + ".enabled", enabled);
+-
+-        if (enabled) {
+-            org.dreeam.leaf.async.AsyncPlayerDataSaving.init();
++        final boolean configuredEnabled = config.getBoolean(getBasePath() + ".enabled", enabled);
++        if (!runtimeConfigurationInitialized) {
++            enabled = configuredEnabled;
++            runtimeConfigurationInitialized = true;
++            if (enabled) {
++                org.dreeam.leaf.async.AsyncPlayerDataSaving.init();
++            }
++        } else if (enabled != configuredEnabled) {
++            org.dreeam.leaf.config.LeafConfig.LOGGER.warn("The setting '{}.enabled' is startup-only; keeping enabled={} until restart.", getBasePath(), enabled);
+         }
+     }
+ }
+diff --git a/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java b/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java
+index f1122658920dff52b008bb777ece9d8879220082..0796318be16d88158ebfbf964b4d4e17120af4ce 100644
+--- a/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java
++++ b/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java
+@@ -15,11 +15,12 @@ public class SparklyPaperParallelWorldTicking extends ConfigModules {
+     @Experimental
+     public static boolean enabled = false;
+     public static int threads = 8;
++    private static boolean runtimeConfigurationInitialized;
+     public static boolean logContainerCreationStacktraces = false;
+     public static boolean disableHardThrow = false;
+     @Deprecated
+     public static Boolean runAsyncTasksSync;
+-    public static UnsafeReadPolicy asyncUnsafeReadHandling = UnsafeReadPolicy.DISABLED;
++    public static volatile UnsafeReadPolicy asyncUnsafeReadHandling = UnsafeReadPolicy.DISABLED;
+ 
+     @Override
+     public void onLoaded() {
+@@ -30,18 +31,26 @@ public class SparklyPaperParallelWorldTicking extends ConfigModules {
+                 **实验性功能**
+                 启用并行世界处理以提高多核 CPU 使用率.""");
+ 
+-        enabled = config.getBoolean(getBasePath() + ".enabled", enabled);
+-        threads = config.getInt(getBasePath() + ".threads", threads);
+-        if (enabled) {
+-            if (threads <= 0) threads = 8;
++        final boolean configuredEnabled = config.getBoolean(getBasePath() + ".enabled", enabled);
++        int configuredThreads = config.getInt(getBasePath() + ".threads", threads);
++        if (configuredEnabled) {
++            if (configuredThreads <= 0) configuredThreads = 8;
+         } else {
+-            threads = 0;
++            configuredThreads = 0;
++        }
++        final boolean configuredDisableHardThrow = configuredEnabled && config.getBoolean(getBasePath() + ".disable-hard-throw", disableHardThrow);
++
++        if (!runtimeConfigurationInitialized) {
++            enabled = configuredEnabled;
++            threads = configuredThreads;
++            disableHardThrow = configuredDisableHardThrow;
++            runtimeConfigurationInitialized = true;
++        } else if (enabled != configuredEnabled || threads != configuredThreads || disableHardThrow != configuredDisableHardThrow) {
++            LeafConfig.LOGGER.warn("The settings '{}.enabled', '{}.threads', and '{}.disable-hard-throw' are startup-only; keeping enabled={}, threads={}, and disable-hard-throw={} until restart.", getBasePath(), getBasePath(), getBasePath(), enabled, threads, disableHardThrow);
+         }
+ 
+         logContainerCreationStacktraces = config.getBoolean(getBasePath() + ".log-container-creation-stacktraces", logContainerCreationStacktraces);
+         logContainerCreationStacktraces = enabled && logContainerCreationStacktraces;
+-        disableHardThrow = config.getBoolean(getBasePath() + ".disable-hard-throw", disableHardThrow);
+-        disableHardThrow = enabled && disableHardThrow;
+         asyncUnsafeReadHandling = UnsafeReadPolicy.fromString(config.getString(getBasePath() + ".async-unsafe-read-handling", asyncUnsafeReadHandling.toString()));
+ 
+         // Transfer old config

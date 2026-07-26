@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 26 Jul 2026 02:54:28 +0300
+Subject: [PATCH] Cache global fluid threshold in NoiseBasedChunkGenerator
+
+
+diff --git a/net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator.java b/net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator.java
+index 3fb94e04dff417794bf46a7722b1b99acf377cbf..6628af389fcec04aa9001b367a8c8bc84fb99b19 100644
+--- a/net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator.java
++++ b/net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator.java
+@@ -67,14 +67,24 @@ public final class NoiseBasedChunkGenerator extends ChunkGenerator {
+     }
+ 
+     private static Aquifer.FluidPicker createFluidPicker(final NoiseGeneratorSettings settings) {
++        // Pyzh start - cache fluid statuses and the global threshold
++        // Leaf's "Reduce fluid status allocation" moves three one-time allocations into a per-call
++        // allocation, but this picker is memoized and then invoked per-block during chunk generation,
++        // so that trades one allocation per generator for one per call. Hoist the statuses back out
++        // and additionally cache Math.min(-54, seaLevel), which was recomputed on every call.
++        final Aquifer.FluidStatus lavaStatus = new Aquifer.FluidStatus(-54, Blocks.LAVA.defaultBlockState());
++        final int seaLevel = settings.seaLevel();
++        final Aquifer.FluidStatus seaStatus = new Aquifer.FluidStatus(seaLevel, settings.defaultFluid());
++        final Aquifer.FluidStatus emptyStatus = new Aquifer.FluidStatus(DimensionType.MIN_Y * 2, Blocks.AIR.defaultBlockState());
++        final int minFluidLevel = Math.min(-54, seaLevel);
+         return (x, y, z) -> {
+             if (SharedConstants.DEBUG_DISABLE_FLUID_GENERATION) {
+-                return new Aquifer.FluidStatus(DimensionType.MIN_Y * 2, Blocks.AIR.defaultBlockState()); // Leaf - Reduce fluid status allocation in NoiseBasedChunkGenerator
++                return emptyStatus;
+             } else {
+-                int seaLevel = settings.seaLevel(); // Leaf - Reduce fluid status allocation in NoiseBasedChunkGenerator
+-                return y < Math.min(-54, seaLevel) ? new Aquifer.FluidStatus(-54, Blocks.LAVA.defaultBlockState()) : new Aquifer.FluidStatus(seaLevel, settings.defaultFluid()); // Leaf - Reduce fluid status allocation in NoiseBasedChunkGenerator
++                return y < minFluidLevel ? lavaStatus : seaStatus;
+             }
+         };
++        // Pyzh end - cache fluid statuses and the global threshold
+     }
+ 
+     @Override

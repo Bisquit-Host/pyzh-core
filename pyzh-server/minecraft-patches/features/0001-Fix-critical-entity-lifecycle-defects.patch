@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 21 Jul 2026 03:31:12 +0300
+Subject: [PATCH] Fix critical entity lifecycle defects
+
+Bound ceiling-dimension trader spawn searches and retain weak-loaded entities until removal succeeds.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+index f27f198e84ac668446c9d57772343ba10464428c..3645ef969b8af3af4071c0685f569d3a343bcc57 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+@@ -970,8 +970,10 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+ 
+             if (entity.isExceedingDespawnTime(true)) {
+                 entity.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.DESPAWN);
+-                entity.leaf$isWeakLoaded = false;
+-                removeAtIndex(this.weakEntityList, i);
++                if (entity.isRemoved()) { // Pyzh - retry when chunk status temporarily prevents removal
++                    entity.leaf$isWeakLoaded = false;
++                    removeAtIndex(this.weakEntityList, i);
++                }
+             }
+         }
+     }
+diff --git a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
+index 7747e2b7c448c309563581064144368481e5d6f8..6771734e46b44a36fa31d8842a1c123290d94619 100644
+--- a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
++++ b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
+@@ -138,12 +138,17 @@ public class WanderingTraderSpawner implements CustomSpawner {
+             // Purpur start - Allow toggling special MobSpawners per world - allow traders to spawn below nether roof
+             BlockPos.MutableBlockPos spawnPos = new BlockPos.MutableBlockPos(xPosition, yPosition, zPosition);
+             if (level.dimensionType().hasCeiling()) {
+-                do {
+-                    spawnPos.relative(net.minecraft.core.Direction.DOWN);
+-                } while (!level.getBlockState(spawnPos).isAir());
+-                do {
+-                    spawnPos.relative(net.minecraft.core.Direction.DOWN);
+-                } while (level.getBlockState(spawnPos).isAir() && spawnPos.getY() > 0);
++                final int minY = level.getMinY();
++                while (spawnPos.getY() > minY && !level.getBlockState(spawnPos).isAir()) {
++                    spawnPos.move(net.minecraft.core.Direction.DOWN);
++                }
++                while (spawnPos.getY() > minY && level.getBlockState(spawnPos).isAir()) {
++                    spawnPos.move(net.minecraft.core.Direction.DOWN);
++                }
++                if (level.getBlockState(spawnPos).isAir()) {
++                    continue; // Pyzh - no floor exists within the dimension bounds
++                }
++                spawnPos.move(net.minecraft.core.Direction.UP);
+             }
+             // Purpur end - Allow toggling special MobSpawners per world
+             if (wanderingTraderSpawnType.isSpawnPositionOk(level, spawnPos, EntityTypes.WANDERING_TRADER)) {

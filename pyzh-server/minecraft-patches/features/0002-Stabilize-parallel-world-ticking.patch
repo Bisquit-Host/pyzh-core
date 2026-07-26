@@ -1,0 +1,213 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 21 Jul 2026 03:35:30 +0300
+Subject: [PATCH] Stabilize parallel world ticking
+
+Join every submitted world tick before propagating failures and serialize buffered-read admission with world closure.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index b651f781dc3cd6c7fc0abd76971218e679ae9772..c5fbf3c6b6a82e3cf6dab23e842e1d42a0f65281 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1939,50 +1939,97 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+ 
+         this.isIteratingOverLevels = true; // Paper - Throw exception on world create while being ticked
+         // Leaf start - SparklyPaper - parallel world ticking
+-        java.util.ArrayDeque<java.util.concurrent.Future<ServerLevel>> tasks = new java.util.ArrayDeque<>();
++        record WorldTickTask(ServerLevel level, java.util.concurrent.Future<?> future) {}
++        java.util.ArrayDeque<WorldTickTask> tasks = new java.util.ArrayDeque<>();
++        Throwable tickFailure = null;
++        boolean interrupted = false;
+         try {
+-        for (ServerLevel level : this.getAllLevels()) {
+-            level.hasPhysicsEvent = org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - BlockPhysicsEvent
+-            level.hasEntityMoveEvent = io.papermc.paper.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - Add EntityMoveEvent
+-            level.hasRidableMoveEvent = org.purpurmc.purpur.event.entity.RidableMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Purpur - Ridables
+-            level.updateLagCompensationTick(); // Paper - lag compensation
+-            net.minecraft.world.level.block.entity.HopperBlockEntity.skipHopperEvents = level.paperConfig().hopper.disableMoveEvent || org.bukkit.event.inventory.InventoryMoveItemEvent.getHandlerList().getRegisteredListeners().length == 0; // Paper - Perf: Optimize Hoppers
+-            profiler.push(() -> level + " " + level.dimension().identifier());
+-            profiler.push("tick");
+-
+-            if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
+-                serverLevelTickingSemaphore.acquire();
+-                tasks.add(
+-                    level.tickExecutor.submit(() -> {
+-                        level.getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map
+-                        level.moonrise$getChunkTaskScheduler().chunkHolderManager.chunkHoldersNoSync.setThread(); // Leaf - thread unsafe chunk map
+-                        ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread currentThread = (ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread) Thread.currentThread();
+-                        currentThread.currentTickingServerLevel = level;
+-                        try {
+-                            tickLevel(level, haveTime); // Leaf - SparklyPaper - parallel world ticking - move level ticking logic out for branch convergence
+-                        } finally {
+-                            serverLevelTickingSemaphore.release();
+-                        }
+-                    }, level)
+-                );
+-            } else {
+-                tickLevel(level, haveTime);
+-            }
++            for (ServerLevel level : this.getAllLevels()) {
++                level.hasPhysicsEvent = org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - BlockPhysicsEvent
++                level.hasEntityMoveEvent = io.papermc.paper.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - Add EntityMoveEvent
++                level.hasRidableMoveEvent = org.purpurmc.purpur.event.entity.RidableMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Purpur - Ridables
++                level.updateLagCompensationTick(); // Paper - lag compensation
++                net.minecraft.world.level.block.entity.HopperBlockEntity.skipHopperEvents = level.paperConfig().hopper.disableMoveEvent || org.bukkit.event.inventory.InventoryMoveItemEvent.getHandlerList().getRegisteredListeners().length == 0; // Paper - Perf: Optimize Hoppers
++                profiler.push(() -> level + " " + level.dimension().identifier());
++                profiler.push("tick");
++
++                if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
++                    serverLevelTickingSemaphore.acquire();
++                    final java.util.concurrent.Future<?> future;
++                    try {
++                        future = level.tickExecutor.submit(() -> {
++                            level.getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map
++                            level.moonrise$getChunkTaskScheduler().chunkHolderManager.chunkHoldersNoSync.setThread(); // Leaf - thread unsafe chunk map
++                            ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread currentThread = (ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread) Thread.currentThread();
++                            currentThread.currentTickingServerLevel = level;
++                            try {
++                                tickLevel(level, haveTime); // Leaf - SparklyPaper - parallel world ticking - move level ticking logic out for branch convergence
++                            } finally {
++                                currentThread.currentTickingServerLevel = null;
++                                serverLevelTickingSemaphore.release();
++                            }
++                        });
++                    } catch (Throwable throwable) {
++                        serverLevelTickingSemaphore.release();
++                        throw throwable;
++                    }
++                    tasks.add(new WorldTickTask(level, future));
++                } else {
++                    tickLevel(level, haveTime);
++                }
+ 
+-            profiler.pop();
+-            profiler.pop();
+-            level.explosionDensityCache.clear(); // Paper - Optimize explosions
+-        }
++                profiler.pop();
++                profiler.pop();
++                level.explosionDensityCache.clear(); // Paper - Optimize explosions
++            }
++        } catch (java.lang.InterruptedException ex) {
++            tickFailure = ex;
++            interrupted = true;
++        } catch (Throwable throwable) {
++            tickFailure = throwable;
++        } finally {
+             while (!tasks.isEmpty()) {
+-                final ServerLevel serverLevel = tasks.poll().get(); // Leaf - thread unsafe chunk map
+-                serverLevel.getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map
+-                serverLevel.moonrise$getChunkTaskScheduler().chunkHolderManager.chunkHoldersNoSync.setThread(); // Leaf - thread unsafe chunk map
++                final WorldTickTask task = tasks.poll();
++                boolean completed = false;
++                while (!completed) {
++                    try {
++                        task.future().get();
++                        completed = true;
++                    } catch (java.lang.InterruptedException ex) {
++                        interrupted = true;
++                        if (tickFailure == null) {
++                            tickFailure = ex;
++                        } else {
++                            tickFailure.addSuppressed(ex);
++                        }
++                    } catch (java.util.concurrent.ExecutionException ex) {
++                        completed = true;
++                        final Throwable cause = ex.getCause() == null ? ex : ex.getCause();
++                        if (tickFailure == null) {
++                            tickFailure = cause;
++                        } else if (tickFailure != cause) {
++                            tickFailure.addSuppressed(cause);
++                        }
++                    }
++                }
++                task.level().getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map
++                task.level().moonrise$getChunkTaskScheduler().chunkHolderManager.chunkHoldersNoSync.setThread(); // Leaf - thread unsafe chunk map
++            }
++            this.isIteratingOverLevels = false; // Paper - Throw exception on world create while being ticked
++            if (interrupted) {
++                Thread.currentThread().interrupt();
+             }
+-        } catch (java.lang.InterruptedException | java.util.concurrent.ExecutionException e) {
+-            throw new RuntimeException(e); // Propagate exception
++        }
++        if (tickFailure instanceof RuntimeException runtimeException) {
++            throw runtimeException;
++        }
++        if (tickFailure instanceof Error error) {
++            throw error;
++        }
++        if (tickFailure != null) {
++            throw new RuntimeException(tickFailure);
+         }
+         // Leaf end - SparklyPaper - parallel world ticking
+-        this.isIteratingOverLevels = false; // Paper - Throw exception on world create while being ticked
+ 
+         if (org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled) { for (ServerLevel world : getAllLevels()) { world.leaf$asyncTracker.onTickEnd(); } } // Leaf - Multithreaded tracker
+ 
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 908adae851185b48b8dc4ba2e7efad02402fba04..9932c13fc4c59cab0fc83ef0f3683f68e4447062 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -224,6 +224,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     // Leaf start - SparklyPaper - parallel world ticking
+     public final java.util.concurrent.ExecutorService tickExecutor;
+     public final java.util.concurrent.ConcurrentLinkedQueue<org.dreeam.leaf.async.world.WorldReadRequest> asyncReadRequestQueue;
++    private final Object asyncReadRequestLifecycleLock = new Object(); // Pyzh - serialize admission with world closure
+     private volatile boolean isShuttingDown = false; // Shutdown handling for async reads
+     // Leaf end - SparklyPaper - parallel world ticking
+ 
+@@ -875,13 +876,31 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+         return this.isShuttingDown;
+     }
+ 
++    public void enqueueAsyncReadRequest(final org.dreeam.leaf.async.world.WorldReadRequest request) {
++        synchronized (this.asyncReadRequestLifecycleLock) {
++            if (this.isShuttingDown || this.asyncReadRequestQueue == null) {
++                request.future().completeExceptionally(new IllegalStateException("World " + this.getWorld().getName() + " is shutting down. Cannot queue buffered read: " + request.type()));
++                return;
++            }
++            if (org.dreeam.leaf.async.world.UnsafeReadPolicy.BUFFERED != org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.asyncUnsafeReadHandling) {
++                request.future().completeExceptionally(new IllegalStateException("Async read buffering was disabled before the request could be queued."));
++                return;
++            }
++            this.asyncReadRequestQueue.offer(request);
++        }
++    }
++
+     public void prepareShutdown() {
+-        this.isShuttingDown = true;
+-        org.dreeam.leaf.async.world.WorldReadRequest req;
+         int clearedRequests = 0;
+-        while ((req = this.asyncReadRequestQueue.poll()) != null) {
+-            req.future().completeExceptionally(new IllegalStateException("World " + this.getWorld().getName() + " is shutting down. Cannot process buffered read: " + req.type()));
+-            clearedRequests++;
++        synchronized (this.asyncReadRequestLifecycleLock) {
++            this.isShuttingDown = true;
++            if (this.asyncReadRequestQueue != null) {
++                org.dreeam.leaf.async.world.WorldReadRequest req;
++                while ((req = this.asyncReadRequestQueue.poll()) != null) {
++                    req.future().completeExceptionally(new IllegalStateException("World " + this.getWorld().getName() + " is shutting down. Cannot process buffered read: " + req.type()));
++                    clearedRequests++;
++                }
++            }
+         }
+         if (clearedRequests > 0) {
+             MinecraftServer.LOGGER.info("PWT: Cleared {} pending async read requests for world {} during shutdown.", clearedRequests, this.getWorld().getName());
+@@ -892,10 +911,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     // Leaf start - SparklyPaper - parallel world ticking
+     private void processAsyncReadRequests() {
+         // Clear queue if buffering gets disabled to prevent memory leaks
+-        if (org.dreeam.leaf.async.world.UnsafeReadPolicy.BUFFERED != org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.asyncUnsafeReadHandling && !this.asyncReadRequestQueue.isEmpty()) {
+-            org.dreeam.leaf.async.world.WorldReadRequest req;
+-            while ((req = this.asyncReadRequestQueue.poll()) != null) {
+-                req.future().completeExceptionally(new IllegalStateException("Async read buffering disabled while request was pending."));
++        if (org.dreeam.leaf.async.world.UnsafeReadPolicy.BUFFERED != org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.asyncUnsafeReadHandling) {
++            synchronized (this.asyncReadRequestLifecycleLock) {
++                org.dreeam.leaf.async.world.WorldReadRequest req;
++                while ((req = this.asyncReadRequestQueue.poll()) != null) {
++                    req.future().completeExceptionally(new IllegalStateException("Async read buffering disabled while request was pending."));
++                }
+             }
+             return;
+         }

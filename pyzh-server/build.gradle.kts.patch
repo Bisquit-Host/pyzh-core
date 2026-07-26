@@ -1,0 +1,92 @@
+--- a/leaf-server/build.gradle.kts
++++ b/leaf-server/build.gradle.kts
+@@ -21,20 +_,43 @@
+ 
+ paperweight {
+     minecraftVersion = providers.gradleProperty("mcVersion")
++    bundlerJarName = "pyzh" // Pyzh - project setup
+     gitFilePatches = false
+ 
+-    // Leaf start - project setup
++    // Pyzh start - fork chain. Leaf's own patches live in the upstream checkout, not in this
++    // repo; ours apply on top of them. Mirrors io.papermc.paperweight.util.upstreamsDirectory.
++    val leafUpstream = providers.gradleProperty("paperweightUpstreamWorkDir")
++        .map { rootProject.layout.projectDirectory.dir(it) }
++        .orElse(rootProject.layout.projectDirectory.dir(".gradle/caches/paperweight/upstreams"))
++        .map { it.dir("leaf") }
++
+     val leaf = forks.register("leaf") {
++        rootDirectory = leafUpstream
++        serverDirectory = leafUpstream.map { it.dir("leaf-server") }
+         upstream.patchDir("paperServer") {
+             upstreamPath = "paper-server"
+             excludes = setOf("src/minecraft", "patches", "build.gradle.kts")
+-            patchesDir = rootDirectory.dir("leaf-server/paper-patches")
+-            outputDir = rootDirectory.dir("paper-server")
+-        }
+-    }
+-
+-    activeFork = leaf
+-    // Leaf end - project setup
++            patchesDir = leafUpstream.map { it.dir("leaf-server/paper-patches") }
++            // Must NOT be the repo-root paper-server: that is the pyzh fork's output, and the
++            // pyzh fork checks out *from* this one. Same path means checking a repo out into
++            // itself, which only survives if the task is UP-TO-DATE. Cold, it dies walking
++            // .git/objects. Leaf's own build puts this inside its root, so do the same.
++            outputDir = leafUpstream.map { it.dir("paper-server") }
++        }
++    }
++
++    val pyzh = forks.register("pyzh") {
++        forks = leaf
++        serverDirectory = rootProject.layout.projectDirectory.dir("pyzh-server")
++        upstream.patchRepo("paperServer") {
++            upstreamRepo = leaf.patchedRepo("paperServer")
++            patchesDir = rootProject.layout.projectDirectory.dir("pyzh-server/paper-patches")
++            outputDir = rootProject.layout.projectDirectory.dir("paper-server")
++        }
++    }
++
++    activeFork = pyzh
++    // Pyzh end - fork chain
+ 
+     updatingMinecraft {
+         // oldPaperCommit = "d4fe85375af18bfa88f44d7c1e6a61904ae550cc"
+@@ -139,7 +_,7 @@
+ }
+ 
+ dependencies {
+-    implementation(project(":leaf-api")) // Leaf - project setup
++    implementation(project(":pyzh-api")) // Pyzh - project setup
+ 
+     // Leaf start - Libraries
+     implementation("com.github.thatsmusic99:ConfigurationMaster-API:v2.0.0-rc.3") { // Leaf config
+@@ -237,14 +_,14 @@
+         val gitBranch = git.exec(providers, "rev-parse", "--abbrev-ref", "HEAD").get().trim()
+         attributes(
+             "Main-Class" to "org.bukkit.craftbukkit.Main",
+-            "Implementation-Title" to "Leaf", // Leaf - Rebrand
++            "Implementation-Title" to "Pyzh", // Pyzh - Rebrand
+             "Implementation-Version" to implementationVersion,
+             "Implementation-Vendor" to date,
+-            "Specification-Title" to "Leaf", // Leaf - Rebrand
++            "Specification-Title" to "Pyzh", // Pyzh - Rebrand
+             "Specification-Version" to project.version,
+-            "Specification-Vendor" to "Winds Studio", // Leaf - Rebrand
+-            "Brand-Id" to "winds-studio:leaf", // Leaf - Rebrand
+-            "Brand-Name" to "Leaf", // Leaf - Rebrand
++            "Specification-Vendor" to "TurboVadim", // Pyzh - Rebrand
++            "Brand-Id" to "turbovadim:pyzh", // Pyzh - Rebrand
++            "Brand-Name" to "Pyzh", // Pyzh - Rebrand
+             "Build-Number" to (build ?: ""),
+             "Build-Time" to buildTime.toString(),
+             "Git-Branch" to gitBranch,
+@@ -472,6 +_,8 @@
+ // Leaf start - Leaf JUnit test suite
+ tasks.register<Test>("runLeafTests") {
+     group = LifecycleBasePlugin.VERIFICATION_GROUP
++    dependsOn(tasks.testClasses) // Pyzh - run our own tests too
++    testClassesDirs = sourceSets.test.get().output.classesDirs // Pyzh - run our own tests too
+     include("**/LeafTestSuite.class")
+     workingDir = temporaryDir
+     useJUnitPlatform {

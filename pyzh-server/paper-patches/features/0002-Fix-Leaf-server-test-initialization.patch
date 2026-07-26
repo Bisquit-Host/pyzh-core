@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 20 Jul 2026 08:55:56 +0300
+Subject: [PATCH] Fix Leaf server test initialization
+
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/legacy/CraftLegacy.java b/src/main/java/org/bukkit/craftbukkit/legacy/CraftLegacy.java
+index 0efca0e1de2d6e5d9bc33c46174973758c8cabb3..622ae94a47630da8fec1df02e5e43f314ffa20d1 100644
+--- a/src/main/java/org/bukkit/craftbukkit/legacy/CraftLegacy.java
++++ b/src/main/java/org/bukkit/craftbukkit/legacy/CraftLegacy.java
+@@ -260,7 +260,8 @@ public final class CraftLegacy {
+     }
+ 
+     static {
+-        if (org.galemc.gale.configuration.GaleGlobalConfiguration.get().logToConsole.legacyMaterialInitialization) LOGGER.warn("Initializing Legacy Material Support. Unless you have legacy plugins and/or data this is a bug!"); // Paper - Improve logging and errors; doesn't need to be an error // Gale - Purpur - do not log legacy Material initialization
++        final org.galemc.gale.configuration.GaleGlobalConfiguration galeConfiguration = org.galemc.gale.configuration.GaleGlobalConfiguration.get(); // Pyzh - tolerate initialization before configuration is loaded
++        if (galeConfiguration == null || galeConfiguration.logToConsole.legacyMaterialInitialization) LOGGER.warn("Initializing Legacy Material Support. Unless you have legacy plugins and/or data this is a bug!"); // Paper - Improve logging and errors; doesn't need to be an error // Gale - Purpur - do not log legacy Material initialization // Pyzh - tolerate initialization before configuration is loaded
+         if (MinecraftServer.getServer() != null && MinecraftServer.getServer().isDebugging()) {
+             new Exception().printStackTrace();
+         }
+diff --git a/src/test/java/org/bukkit/craftbukkit/legacy/MaterialReroutingTest.java b/src/test/java/org/bukkit/craftbukkit/legacy/MaterialReroutingTest.java
+index f6b04513355c0c56d30126faa667e22c9d989818..6ca37fd665e6d7cb06f85e418b08904f3b65736e 100644
+--- a/src/test/java/org/bukkit/craftbukkit/legacy/MaterialReroutingTest.java
++++ b/src/test/java/org/bukkit/craftbukkit/legacy/MaterialReroutingTest.java
+@@ -59,6 +59,9 @@ public class MaterialReroutingTest {
+                 // Paper start - types that cannot be translated to ItemType/BlockType
+                 .filter(entry -> !entry.getName().equals("com/destroystokyo/paper/MaterialSetTag.class"))
+                 // Paper end - types that cannot be translated to ItemType/BlockType
++                // Pyzh start - API introduced after the material flattening and therefore has no legacy ABI
++                .filter(entry -> !entry.getName().equals("dev/imanity/antixray/sdk/AntiXrayAdapter.class"))
++                // Pyzh end - API introduced after the material flattening and therefore has no legacy ABI
+                 .map(entry -> {
+                     try {
+                         return MaterialReroutingTest.jarFile.getInputStream(entry);

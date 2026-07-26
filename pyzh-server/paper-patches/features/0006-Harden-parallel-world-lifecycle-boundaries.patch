@@ -1,0 +1,342 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 21 Jul 2026 04:35:00 +0300
+Subject: [PATCH] Harden parallel world lifecycle boundaries
+
+Serialize world unload with the server barrier, refuse unsafe cross-world worker teleports, defer plugin respawns, and keep global scheduler work on the main thread. Also finish migration, offline-flight, and buffered-read corrections.
+
+diff --git a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+index 1bf392bac..3239938a2 100644
+--- a/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
++++ b/src/main/java/io/papermc/paper/world/PaperWorldLoader.java
+@@ -58,7 +58,7 @@ public record PaperWorldLoader(MinecraftServer server, String levelId) {
+         final String defaultName = defaultWorldName(this.levelId, info.stemKey());
+ 
+         try {
+-            WorldFolderMigration.migrateStartupWorld(this.server.storageSource, this.server.registryAccess(), defaultName, info.stemKey(), info.dimensionKey());
++            WorldFolderMigration.migrateStartupWorld(this.server.storageSource, this.server.registryAccess(), defaultName, info.stemKey(), info.dimensionKey(), () -> !this.server.isRunning());
+         } catch (final IOException ex) {
+             throw new RuntimeException("Failed to migrate world storage for " + defaultName, ex);
+         }
+diff --git a/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java b/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java
+index c7a1a3a6a..399527a08 100644
+--- a/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java
++++ b/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java
+@@ -6,6 +6,8 @@ import io.papermc.paper.world.saveddata.PaperWorldMetadata;
+ import java.io.IOException;
+ import java.nio.file.Files;
+ import java.nio.file.Path;
++import java.util.concurrent.CancellationException;
++import java.util.function.BooleanSupplier;
+ import net.minecraft.core.HolderLookup;
+ import net.minecraft.resources.ResourceKey;
+ import net.minecraft.world.level.Level;
+@@ -38,11 +40,22 @@ public final class WorldFolderMigration {
+         final String worldName,
+         final ResourceKey<LevelStem> stemKey,
+         final ResourceKey<Level> dimensionKey
++    ) throws IOException {
++        migrateStartupWorld(rootAccess, registryAccess, worldName, stemKey, dimensionKey, () -> false);
++    }
++
++    public static void migrateStartupWorld(
++        final LevelStorageSource.LevelStorageAccess rootAccess,
++        final HolderLookup.Provider registryAccess,
++        final String worldName,
++        final ResourceKey<LevelStem> stemKey,
++        final ResourceKey<Level> dimensionKey,
++        final BooleanSupplier shutdownRequested
+     ) throws IOException {
+         final WorldMigrationContext context = new WorldMigrationContext(rootAccess, registryAccess, worldName, stemKey, dimensionKey);
+         final MigrationMode mode = classifyStartupMigration(context);
+-        if (mode != MigrationMode.NO_OP) {
+-            warnAndDelayStartupMigration();
++        if (mode != MigrationMode.NO_OP && !warnAndDelayStartupMigration(shutdownRequested)) {
++            throw new CancellationException("Startup world migration cancelled for " + worldName + " because server shutdown was requested");
+         }
+         switch (mode) {
+             case LEGACY_CRAFTBUKKIT_MIGRATION -> LegacyCraftBukkitWorldMigration.migrate(context);
+@@ -62,8 +75,12 @@ public final class WorldFolderMigration {
+     }
+ 
+     public static synchronized void warnAndDelayStartupMigration() {
++        warnAndDelayStartupMigration(() -> false);
++    }
++
++    private static synchronized boolean warnAndDelayStartupMigration(final BooleanSupplier shutdownRequested) {
+         if (startupMigrationWarningShown) {
+-            return;
++            return !shutdownRequested.getAsBoolean();
+         }
+         startupMigrationWarningShown = true;
+         LOGGER.warn("===================== ! ALERT ! =====================");
+@@ -75,14 +92,26 @@ public final class WorldFolderMigration {
+         if (DISABLE_MIGRATION_DELAY) {
+             LOGGER.warn("Migration delay disabled by system property.");
+         } else {
+-            try {
+-                Thread.sleep(30_000L);
+-            } catch (final InterruptedException ex) {
+-                Thread.currentThread().interrupt();
+-                throw new RuntimeException("Interrupted while waiting before startup world migration", ex);
++            final long deadline = System.nanoTime() + 30_000_000_000L;
++            while (!shutdownRequested.getAsBoolean()) {
++                final long remainingNanos = deadline - System.nanoTime();
++                if (remainingNanos <= 0L) {
++                    break;
++                }
++                try {
++                    Thread.sleep(Math.min(250L, Math.max(1L, remainingNanos / 1_000_000L)));
++                } catch (final InterruptedException ex) {
++                    Thread.currentThread().interrupt();
++                    throw new RuntimeException("Interrupted while waiting before startup world migration", ex);
++                }
+             }
+         }
++        if (shutdownRequested.getAsBoolean()) {
++            LOGGER.warn("Startup world migration cancelled because server shutdown was requested.");
++            return false;
++        }
+         LOGGER.info("Continuing with startup world migration.");
++        return true;
+     }
+ 
+     private static MigrationMode classifyStartupMigration(final WorldMigrationContext context) {
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftOfflinePlayer.java b/src/main/java/org/bukkit/craftbukkit/CraftOfflinePlayer.java
+index b6bd37698..2d6705417 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftOfflinePlayer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftOfflinePlayer.java
+@@ -589,54 +589,56 @@ public class CraftOfflinePlayer implements OfflinePlayer, ConfigurationSerializa
+     // Purpur start - OfflinePlayer API
+     @Override
+     public boolean getAllowFlight() {
+-        if (this.isOnline()) {
+-            return this.getPlayer().getAllowFlight();
+-        } else {
+-            CompoundTag data = this.getData();
+-            if (data == null) return false;
+-            if (!(data.get("abilities") instanceof CompoundTag abilities)) return false;
+-            return abilities.getByteOr("mayfly", (byte) 0) == (byte) 1;
++        Player player = this.getPlayer();
++        if (player != null) {
++            return player.getAllowFlight();
+         }
++        CompoundTag data = this.getData();
++        if (data == null) return false;
++        if (!(data.get("abilities") instanceof CompoundTag abilities)) return false;
++        return abilities.getByteOr("mayfly", (byte) 0) == (byte) 1;
+     }
+ 
+     @Override
+     public void setAllowFlight(boolean flight) {
+-        if (this.isOnline()) {
+-            this.getPlayer().setAllowFlight(flight);
+-        } else {
+-            CompoundTag data = this.getData();
+-            if (data == null) return;
+-            if (!(data.get("abilities") instanceof CompoundTag abilities)) return;
+-            abilities.putByte("mayfly", (byte) (flight ? 1 : 0));
+-            data.put("abilities", abilities);
+-            save(data);
++        Player player = this.getPlayer();
++        if (player != null) {
++            player.setAllowFlight(flight);
++            return;
+         }
++        CompoundTag data = this.getData();
++        if (data == null) return;
++        if (!(data.get("abilities") instanceof CompoundTag abilities)) return;
++        abilities.putByte("mayfly", (byte) (flight ? 1 : 0));
++        data.put("abilities", abilities);
++        save(data);
+     }
+ 
+     @Override
+     public boolean isFlying() {
+-        if (this.isOnline()) {
+-            return this.getPlayer().isFlying(); // Pyzh - avoid recursing through the offline-player facade
+-        } else {
+-            CompoundTag data = this.getData();
+-            if (data == null) return false;
+-            if (!(data.get("abilities") instanceof CompoundTag abilities)) return false;
+-            return abilities.getByteOr("flying", (byte) 0) == (byte) 1;
++        Player player = this.getPlayer();
++        if (player != null) {
++            return player.isFlying();
+         }
++        CompoundTag data = this.getData();
++        if (data == null) return false;
++        if (!(data.get("abilities") instanceof CompoundTag abilities)) return false;
++        return abilities.getByteOr("flying", (byte) 0) == (byte) 1;
+     }
+ 
+     @Override
+     public void setFlying(boolean value) {
+-        if (this.isOnline()) {
+-            this.getPlayer().setFlying(value);
+-        } else {
+-            CompoundTag data = this.getData();
+-            if (data == null) return;
+-            if (!(data.get("abilities") instanceof CompoundTag abilities)) return;
+-            abilities.putByte("mayfly", (byte) (value ? 1 : 0));
+-            data.put("abilities", abilities);
+-            save(data);
++        Player player = this.getPlayer();
++        if (player != null) {
++            player.setFlying(value);
++            return;
+         }
++        CompoundTag data = this.getData();
++        if (data == null) return;
++        if (!(data.get("abilities") instanceof CompoundTag abilities)) return;
++        abilities.putByte("flying", (byte) (value ? 1 : 0));
++        data.put("abilities", abilities);
++        save(data);
+     }
+ 
+     @Override
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftServer.java b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+index 424efd12c..9c05f8314 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftServer.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftServer.java
+@@ -1376,11 +1376,26 @@ public final class CraftServer implements Server {
+             return false;
+         }
+ 
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled
++            && Thread.currentThread() != this.console.getRunningThread()) {
++            this.getLogger().log(Level.WARNING, "Cannot unload world {0} outside the main server thread while parallel world ticking is enabled", world.getName());
++            return false;
++        }
++
+         WorldUnloadEvent event = new WorldUnloadEvent(handle.getWorld());
+         if (!event.callEvent()) {
+             return false;
+         }
+ 
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
++            try {
++                handle.shutdownTickExecutor();
++            } catch (final Throwable throwable) {
++                this.getLogger().log(Level.SEVERE, "Failed to shut down parallel ticking for world " + world.getName(), throwable);
++                return false;
++            }
++        }
++
+         try {
+             if (save) {
+                 handle.save(null, true, false); // Paper - Fix saving in unloadWorld
+diff --git a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
+index 97678ec49..72303e2a8 100644
+--- a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
++++ b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
+@@ -100,17 +100,12 @@ public class CraftBlock implements Block {
+             return defaultValue;
+         }
+ 
+-        // Deadlock prevention - start
++        // A world tick thread must never synchronously read another world. Waiting could
++        // deadlock two worlds, while direct execution would violate the target world's ownership.
+         if (Thread.currentThread() instanceof ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread) {
+-            try {
+-                org.dreeam.leaf.async.world.WorldReadRequest request = new org.dreeam.leaf.async.world.WorldReadRequest(type, params, null);
+-                Object result = level.executeReadRequest(request);
+-                return (T) result;
+-            } catch (Exception e) {
+-                return defaultValue;
+-            }
++            org.bukkit.Bukkit.getLogger().log(java.util.logging.Level.WARNING, "PWT: Refusing cross-world block read for " + methodName + " in world " + level.getWorld().getName());
++            return defaultValue;
+         }
+-        // Deadlock prevention - end
+ 
+         java.util.concurrent.CompletableFuture<Object> future = new java.util.concurrent.CompletableFuture<>();
+ 
+diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
+index 93eec0591..e36424773 100644
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
+@@ -322,6 +322,15 @@ public abstract class CraftEntity implements org.bukkit.entity.Entity {
+             return false;
+         }
+ 
++        final ServerLevel destinationLevel = ((CraftWorld) location.getWorld()).getHandle();
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled
++            && Thread.currentThread() instanceof ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread tickThread
++            && (tickThread.currentTickingServerLevel != entity.level() || destinationLevel != entity.level())) {
++            LOGGER.warn("PWT: Refusing teleport of {} from world tick thread {} to world {}; use teleportAsync for cross-world teleports",
++                entity, tickThread.currentTickingServerLevel == null ? "unknown" : tickThread.currentTickingServerLevel.dimension().identifier(), destinationLevel.dimension().identifier());
++            return false;
++        }
++
+         final Set<net.minecraft.world.entity.Relative> relativeFlags = EnumSet.noneOf(net.minecraft.world.entity.Relative.class);
+         for (final TeleportFlag flag : flags) {
+             if (flag instanceof TeleportFlag.Relative relativeFlag) {
+@@ -330,7 +339,7 @@ public abstract class CraftEntity implements org.bukkit.entity.Entity {
+         }
+ 
+         return this.entity.teleport(new TeleportTransition(
+-            ((CraftWorld) location.getWorld()).getHandle(),
++            destinationLevel,
+             CraftLocation.toVec3(location),
+             Vec3.ZERO,
+             location.getYaw(),
+diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+index 508ef876b..1ba417864 100644
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+@@ -3153,8 +3153,18 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
+         @Override
+         public void respawn() {
+             if (CraftPlayer.this.getHealth() <= 0 && CraftPlayer.this.isOnline()) {
+-                CraftPlayer.this.server.getServer().getPlayerList().respawn(CraftPlayer.this.getHandle(), false, Entity.RemovalReason.KILLED, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason.PLUGIN);
+-                CraftPlayer.this.getHandle().connection.restartClientLoadTimerAfterRespawn();
++                final Runnable respawn = () -> {
++                    if (CraftPlayer.this.getHealth() <= 0 && CraftPlayer.this.isOnline()) {
++                        CraftPlayer.this.server.getServer().getPlayerList().respawn(CraftPlayer.this.getHandle(), false, Entity.RemovalReason.KILLED, org.bukkit.event.player.PlayerRespawnEvent.RespawnReason.PLUGIN);
++                        CraftPlayer.this.getHandle().connection.restartClientLoadTimerAfterRespawn();
++                    }
++                };
++                if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled
++                    && Thread.currentThread() instanceof ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread) {
++                    CraftPlayer.this.server.getServer().execute(respawn);
++                    return;
++                }
++                respawn.run();
+             }
+         }
+ 
+diff --git a/src/main/java/org/bukkit/craftbukkit/scheduler/CraftScheduler.java b/src/main/java/org/bukkit/craftbukkit/scheduler/CraftScheduler.java
+index bbf37820f..ed2ace663 100644
+--- a/src/main/java/org/bukkit/craftbukkit/scheduler/CraftScheduler.java
++++ b/src/main/java/org/bukkit/craftbukkit/scheduler/CraftScheduler.java
+@@ -254,6 +254,12 @@ public class CraftScheduler implements BukkitScheduler {
+     @Override
+     public <T> Future<T> callSyncMethod(final Plugin plugin, final Callable<T> task) {
+         CraftScheduler.validate(plugin, task);
++        if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled
++            && Thread.currentThread() instanceof ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread) {
++            return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException(
++                "Cannot synchronously call the global scheduler from a parallel world tick thread"
++            ));
++        }
+         final CraftFuture<T> future = new CraftFuture<T>(task, plugin, this.nextId());
+         this.handle(future, 0L);
+         return future;
+@@ -521,16 +527,6 @@ public class CraftScheduler implements BukkitScheduler {
+         }
+         // Paper end
+         task.setNextRun(this.currentTick + delay);
+-        // Leaf start - SparklyPaper - parallel world ticking - run one-shot sync tasks from a Level Tick Thread inline to avoid deadlocks (e.g. MythicMobs callSyncAndJoin), but not inside a chunk-system critical section
+-        if (task.isSync() && task.getTaskId() != -1 && delay == 0L && task.getPeriod() == CraftTask.NO_REPEATING
+-                && Thread.currentThread() instanceof ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread levelThread) {
+-            final net.minecraft.server.level.ServerLevel level = levelThread.currentTickingServerLevel;
+-            if (level != null && !level.moonrise$getChunkTaskScheduler().chunkHolderManager.areTicketUpdatesBlocked()) {
+-                task.run();
+-                return task;
+-            }
+-        }
+-        // Leaf end - SparklyPaper - parallel world ticking
+         this.addTask(task);
+         return task;
+     }

@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 21 Jul 2026 03:37:45 +0300
+Subject: [PATCH] Remove unsafe chunk holder mirror
+
+Use Moonrise's canonical concurrent holder table because asynchronous ticket propagation may create holders from non-owner threads.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+index c6f85843300a914ea5ca210f0fd4198a3bc67b23..a6587693515dd17e5308207a93ab4ac73f362b83 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+@@ -80,7 +80,6 @@ public final class ChunkHolderManager {
+     final ChunkUnloadQueue unloadQueue;
+ 
+     private final ConcurrentChainedLong2ReferenceHashTable<NewChunkHolder> chunkHolders = ConcurrentChainedLong2ReferenceHashTable.createWithCapacity(16384, 0.25f);
+-    public final org.dreeam.leaf.world.ChunkCache<NewChunkHolder> chunkHoldersNoSync; // Leaf - thread unsafe chunk map
+     private final ServerLevel world;
+     private final ChunkTaskScheduler taskScheduler;
+     private long currentTick;
+@@ -116,7 +115,6 @@ public final class ChunkHolderManager {
+         this.taskScheduler = taskScheduler;
+         this.ticketLockArea = new ReentrantAreaLock(taskScheduler.getChunkSystemLockShift());
+         this.unloadQueue = new ChunkUnloadQueue(((ChunkSystemServerLevel)world).moonrise$getRegionChunkShift());
+-        this.chunkHoldersNoSync = new org.dreeam.leaf.world.ChunkCache<>(world.getChunkSource().mainThread); // Leaf - thread unsafe chunk map
+     }
+ 
+     public boolean processTicketUpdates(final int chunkX, final int chunkZ) {
+@@ -384,7 +382,6 @@ public final class ChunkHolderManager {
+                 if (current == null) {
+                     // must create
+                     current = ChunkHolderManager.this.createChunkHolder(key);
+-                    ChunkHolderManager.this.chunkHoldersNoSync.put(key, current); // Leaf - thread unsafe chunk map
+                     ChunkHolderManager.this.chunkHolders.put(key, current);
+                     current.updateTicketLevel(newLevel);
+                 } else {
+@@ -913,24 +910,11 @@ public final class ChunkHolderManager {
+     }
+ 
+     public NewChunkHolder getChunkHolder(final int chunkX, final int chunkZ) {
+-        // Leaf start - thread unsafe chunk map
+-        final long position = CoordinateUtils.getChunkKey(chunkX, chunkZ);
+-        if (this.chunkHoldersNoSync.isSameThread()) {
+-            return this.chunkHoldersNoSync.get(position);
+-        } else {
+-            return this.chunkHolders.get(position);
+-        }
+-        // Leaf end - thread unsafe chunk map
++        return this.chunkHolders.get(CoordinateUtils.getChunkKey(chunkX, chunkZ)); // Pyzh - holder creation can occur during asynchronous ticket propagation
+     }
+ 
+     public NewChunkHolder getChunkHolder(final long position) {
+-        // Leaf start - thread unsafe chunk map
+-        if (this.chunkHoldersNoSync.isSameThread()) {
+-            return this.chunkHoldersNoSync.get(position);
+-        } else {
+-            return this.chunkHolders.get(position);
+-        }
+-        // Leaf end - thread unsafe chunk map
++        return this.chunkHolders.get(position); // Pyzh - use the canonical concurrent holder table
+     }
+ 
+     public void raisePriority(final int x, final int z, final Priority priority) {
+@@ -989,7 +973,6 @@ public final class ChunkHolderManager {
+         }
+ 
+         current = this.createChunkHolder(position);
+-        this.chunkHoldersNoSync.put(position, current); // Leaf - thread unsafe chunk map
+         this.chunkHolders.put(position, current);
+ 
+ 
+@@ -1162,11 +1145,7 @@ public final class ChunkHolderManager {
+         holder.onUnload();
+         this.autoSaveQueue.remove(holder);
+         PlatformHooks.get().onChunkHolderDelete(this.world, holder.vanillaChunkHolder);
+-        // Leaf start - thread unsafe chunk map
+-        long position = CoordinateUtils.getChunkKey(holder.chunkX, holder.chunkZ);
+-        this.chunkHoldersNoSync.remove(position);
+-        this.chunkHolders.remove(position);
+-        // Leaf end - thread unsafe chunk map
++        this.chunkHolders.remove(CoordinateUtils.getChunkKey(holder.chunkX, holder.chunkZ)); // Pyzh - canonical holder table is safe for async ticket updates
+     }
+ 
+     // note: never call while inside the chunk system, this will absolutely break everything
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index c5fbf3c6b6a82e3cf6dab23e842e1d42a0f65281..11ded8fc26563335d762410f803782d5ebf9d6d1 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1959,7 +1959,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+                     try {
+                         future = level.tickExecutor.submit(() -> {
+                             level.getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map
+-                            level.moonrise$getChunkTaskScheduler().chunkHolderManager.chunkHoldersNoSync.setThread(); // Leaf - thread unsafe chunk map
+                             ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread currentThread = (ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread) Thread.currentThread();
+                             currentThread.currentTickingServerLevel = level;
+                             try {
+@@ -2013,7 +2012,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+                     }
+                 }
+                 task.level().getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map
+-                task.level().moonrise$getChunkTaskScheduler().chunkHolderManager.chunkHoldersNoSync.setThread(); // Leaf - thread unsafe chunk map
+             }
+             this.isIteratingOverLevels = false; // Paper - Throw exception on world create while being ticked
+             if (interrupted) {
