@@ -30,3 +30,6 @@ pyzh-server/src/main
 pyzh-server/src/minecraft
 paper-api
 paper-server
+
+# JVM heap dumps (tests can emit these on OOM)
+*.hprof

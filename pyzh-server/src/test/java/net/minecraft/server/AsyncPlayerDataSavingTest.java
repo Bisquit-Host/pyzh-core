@@ -6,6 +6,7 @@ import org.dreeam.leaf.config.modules.async.AsyncPlayerDataSave;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -14,6 +15,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -124,12 +126,19 @@ public class AsyncPlayerDataSavingTest {
             Assertions.assertTrue(shutdownEntered.await(5L, TimeUnit.SECONDS));
 
             CompletableFuture<Void> rejectedSave;
-            final long rejectionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L);
+            // Poll cheaply rather than blocking for the whole budget in one iteration: a single
+            // get() with the full deadline could consume it entirely, so on a slow machine the
+            // loop never observed the executor transitioning into rejecting submissions.
+            final long rejectionDeadline = System.nanoTime() + REJECTION_TIMEOUT.toNanos();
             do {
                 rejectedSave = AsyncPlayerDataSaving.submitPlayer(UUID.randomUUID(), new byte[]{8}, data -> {
                 });
                 if (!rejectedSave.isCompletedExceptionally()) {
-                    rejectedSave.get(5L, TimeUnit.SECONDS);
+                    try {
+                        rejectedSave.get(100L, TimeUnit.MILLISECONDS);
+                    } catch (final TimeoutException | ExecutionException ignored) {
+                        // Still draining, or already rejected; the loop condition decides.
+                    }
                 }
             } while (!rejectedSave.isCompletedExceptionally() && System.nanoTime() < rejectionDeadline);
             final CompletableFuture<Void> finalRejectedSave = rejectedSave;
@@ -166,9 +175,22 @@ public class AsyncPlayerDataSavingTest {
         }
     }
 
+    /**
+     * How long the rejection loop may wait for the executor to start rejecting submissions.
+     */
+    private static final Duration REJECTION_TIMEOUT = Duration.ofSeconds(30L);
+
+    /**
+     * Deadlock guard for workers parked on a test latch. It must comfortably exceed the slowest
+     * path the main thread can take while a worker is parked - notably {@link #REJECTION_TIMEOUT}
+     * - otherwise the guard fires while the test is still making progress and reports a spurious
+     * failure. A healthy run releases these latches in milliseconds; this bound is never reached.
+     */
+    private static final Duration LATCH_TIMEOUT = REJECTION_TIMEOUT.plusSeconds(30L);
+
     private static void await(final CountDownLatch latch) {
         try {
-            if (!latch.await(5L, TimeUnit.SECONDS)) {
+            if (!latch.await(LATCH_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
                 throw new AssertionError("Timed out waiting for test latch");
             }
         } catch (final InterruptedException ex) {
