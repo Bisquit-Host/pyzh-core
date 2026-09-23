@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Wed, 23 Sep 2026 18:51:12 +0300
+Subject: [PATCH] Use configured pathfinding workers before queueing
+
+
+diff --git a/java/org/dreeam/leaf/async/path/AsyncPathProcessor.java b/java/org/dreeam/leaf/async/path/AsyncPathProcessor.java
+index df17ffcabbe1940b09bfab7a18572781761a7aa1..01f01cabc901298d114ab09059a87c965a716e72 100644
+--- a/java/org/dreeam/leaf/async/path/AsyncPathProcessor.java
++++ b/java/org/dreeam/leaf/async/path/AsyncPathProcessor.java
+@@ -33,13 +33,14 @@ public final class AsyncPathProcessor {
+     public static void init() {
+         if (PATH_PROCESSING_EXECUTOR == null) {
+             PATH_PROCESSING_EXECUTOR = new ThreadPoolExecutor(
+-                getCorePoolSize(),
++                getMaxPoolSize(), // Pyzh - Use configured workers before queueing behind a single worker.
+                 getMaxPoolSize(),
+                 getKeepAliveTime(), TimeUnit.SECONDS,
+                 getQueueImpl(),
+                 getThreadFactory(),
+                 getRejectedPolicy()
+             );
++            PATH_PROCESSING_EXECUTOR.allowCoreThreadTimeOut(true); // Pyzh - Release idle workers like the old non-core threads did.
+         } else {
+             // Temp no-op
+             //throw new IllegalStateException();
+@@ -66,16 +67,12 @@ public final class AsyncPathProcessor {
+         }
+     }
+ 
+-    private static int getCorePoolSize() {
+-        return 1;
+-    }
+-
+     private static int getMaxPoolSize() {
+         return AsyncPathfinding.asyncPathfindingMaxThreads;
+     }
+ 
+     private static long getKeepAliveTime() {
+-        return AsyncPathfinding.asyncPathfindingKeepalive;
++        return Math.max(1, AsyncPathfinding.asyncPathfindingKeepalive); // Pyzh - Core thread timeout requires a positive keepalive.
+     }
+ 
+     private static BlockingQueue<Runnable> getQueueImpl() {

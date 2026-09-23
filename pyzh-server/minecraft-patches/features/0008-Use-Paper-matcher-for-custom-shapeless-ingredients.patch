@@ -5,7 +5,7 @@ Subject: [PATCH] Use Paper matcher for custom shapeless ingredients
 
 
 diff --git a/net/minecraft/world/item/crafting/ShapelessRecipe.java b/net/minecraft/world/item/crafting/ShapelessRecipe.java
-index e8b9e5f49e498c8ba059cdb4a25f6273668e2c72..0604adcf74bff94fc3fbdf357d60c5fcbd40cfc5 100644
+index e8b9e5f49e498c8ba059cdb4a25f6273668e2c72..ef6b929185d8c7a530941f57630e37c28a1373f0 100644
 --- a/net/minecraft/world/item/crafting/ShapelessRecipe.java
 +++ b/net/minecraft/world/item/crafting/ShapelessRecipe.java
 @@ -38,7 +38,8 @@ public class ShapelessRecipe extends NormalCraftingRecipe {
@@ -27,12 +27,36 @@ index e8b9e5f49e498c8ba059cdb4a25f6273668e2c72..0604adcf74bff94fc3fbdf357d60c5fc
          // Gale end - Airplane - simpler ShapelessRecipe comparison for vanilla
          super(commonInfo, bookInfo);
          this.result = result;
-@@ -82,7 +83,7 @@ public class ShapelessRecipe extends NormalCraftingRecipe {
+@@ -82,7 +83,11 @@ public class ShapelessRecipe extends NormalCraftingRecipe {
      @Override
      public boolean matches(final CraftingInput input, final Level level) {
          // Gale start - Airplane - simpler ShapelessRecipe comparison for vanilla
 -        if (!this.isBukkit) {
 +        if (this.useSimpleMatching) {
++            // Pyzh start - Greedy assignment can fail on overlapping ingredients; let Paper's matcher decide those.
++            if (input.ingredientCount() != this.ingredients.size()) {
++                return false;
++            }
              List<Ingredient> ingredients = com.google.common.collect.Lists.newArrayList(this.ingredients.toArray(new Ingredient[0]));
  
              inventory:
+@@ -97,11 +102,17 @@ public class ShapelessRecipe extends NormalCraftingRecipe {
+                         }
+                     }
+ 
+-                    return false;
++                    if (this.ingredients.stream().noneMatch(ingredient -> ingredient.test(itemStack))) {
++                        return false;
++                    }
++                    break;
+                 }
+             }
+ 
+-            return ingredients.isEmpty();
++            if (ingredients.isEmpty()) {
++                return true;
++            }
++            // Pyzh end - Greedy assignment can fail on overlapping ingredients; let Paper's matcher decide those.
+         }
+         // Gale end - Airplane - simpler ShapelessRecipe comparison for vanilla
+         // Paper start - Improve exact choice recipe ingredients & unwrap ternary

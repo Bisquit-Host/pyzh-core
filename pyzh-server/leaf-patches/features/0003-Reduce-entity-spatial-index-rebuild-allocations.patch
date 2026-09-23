@@ -1,0 +1,478 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Wed, 23 Sep 2026 18:51:12 +0300
+Subject: [PATCH] Reduce entity spatial index rebuild allocations
+
+
+diff --git a/java/org/dreeam/leaf/util/KDTree2D.java b/java/org/dreeam/leaf/util/KDTree2D.java
+index c432a5cbac772d2fba0b139b44b9c486a6f46910..6aea03482330ba2f982a1fa36f0a99c7efb32a5f 100644
+--- a/java/org/dreeam/leaf/util/KDTree2D.java
++++ b/java/org/dreeam/leaf/util/KDTree2D.java
+@@ -4,7 +4,6 @@ public final class KDTree2D {
+ 
+     private static final double[] EMPTY_DOUBLES = {};
+     private static final int[] EMPTY_INTS = {};
+-    private static final Node[] EMPTY_NODES = {};
+     private static final boolean ENABLE_FMA = LeafConstants.ENABLE_FMA;
+ 
+     private static final int INITIAL_CAPACITY = 8;
+@@ -12,7 +11,6 @@ public final class KDTree2D {
+     /// indicate empty on [#search]
+     /// indicate leaf node on [#nrl]
+     private static final int SENTINEL = -1;
+-    private Node[] stack = EMPTY_NODES;
+     private int[] search = EMPTY_INTS;
+     /// [#SENTINEL] for leaf / right node index for internal
+     private int[] nrl = EMPTY_INTS;
+@@ -22,49 +20,70 @@ public final class KDTree2D {
+     private double[] nyl = EMPTY_DOUBLES;
+     // index for leaf
+     private int[] nil = EMPTY_INTS;
++    // Pyzh - Reuse point and index buffers across rebuilds.
++    private final double[][] points = {EMPTY_DOUBLES, EMPTY_DOUBLES};
++    private int[] indices = EMPTY_INTS;
++    private int size;
+ 
+     public void build(final double[][] coords, final int[] indices) {
+-        if (indices.length == 0 || coords.length != 2) {
+-            ensureSearch(0, 0);
++        this.clear();
++        for (int i = 0; i < indices.length; i++) {
++            this.add(coords[0][i], coords[1][i]);
++        }
++        this.build();
++    }
++
++    // Pyzh - Fill with add() between clear() and build() so rebuilds reuse buffers.
++    public void clear() {
++        this.size = 0;
++    }
++
++    /// [#nearestIdx] identifies points by the order they were added since [#clear].
++    public void add(final double x, final double y) {
++        if (size == indices.length) {
++            growPoints();
++        }
++        points[0][size] = x;
++        points[1][size] = y;
++        size++;
++    }
++
++    public void build() {
++        ensureSearch(0, 0); // Queries see an empty tree if construction fails.
++        if (size == 0) {
+             return;
+         }
+-        for (int i = 0; i < indices.length; i++) {
++        for (int i = 0; i < size; i++) {
+             indices[i] = i;
+         }
+ 
+-        int st = 0;
+-        ensureConstruct(st);
+-        stack[st++] = new Node(SENTINEL, false, 0, indices.length, 0);
+-        int nodeLen = 0;
+-        while (st != 0) {
+-            ensureNode(nodeLen);
+-            final Node n = stack[--st];
+-            final int curr = nodeLen++;
+-            if (n.len() <= 1) {
+-                final int p = indices[n.offset()];
+-                nrl[curr] = SENTINEL;
+-                nxl[curr] = coords[0][p];
+-                nyl[curr] = coords[1][p];
+-                nil[curr] = p;
+-            } else {
+-                final int axis = (n.depth()) % 2;
+-                final int med = (n.len() - 1) / 2;
+-                final int k = n.offset() + med;
+-                final double[] coord = coords[axis];
+-                PartialSort.nthElement(indices, coord, n.offset(), n.offset() + n.len() - 1, k);
+-
+-                nxl[curr] = coord[indices[k]];
++        final int nodeCount = 2 * size - 1;
++        ensureNodeCapacity(nodeCount);
++        buildNode(0, size, 0, 0);
++        ensureSearch(size, nodeCount);
++    }
+ 
+-                ensureConstruct(st);
+-                stack[st++] = new Node(curr, false, n.offset() + med + 1, n.len() - med - 1, n.depth() + 1);
+-                stack[st++] = new Node(curr, true, n.offset(), med + 1, n.depth() + 1);
+-            }
+-            if (n.parent() != SENTINEL) {
+-                nrl[n.parent()] = n.left() ? SENTINEL : curr;
+-            }
++    // Pyzh - Balanced recursion has logarithmic depth and avoids a temporary object per tree node.
++    private void buildNode(final int offset, final int count, final int axis, final int node) {
++        if (count == 1) {
++            final int point = indices[offset];
++            nrl[node] = SENTINEL;
++            nxl[node] = points[0][point];
++            nyl[node] = points[1][point];
++            nil[node] = point;
++            return;
+         }
+ 
+-        ensureSearch(indices.length, nodeLen);
++        final int leftCount = (count + 1) >>> 1;
++        final int median = offset + leftCount - 1;
++        PartialSort.nthElement(indices, points[axis], offset, offset + count - 1, median);
++        nxl[node] = points[axis][indices[median]];
++        // A subtree with n points occupies 2n - 1 nodes; the right subtree follows the left.
++        final int right = node + 2 * leftCount;
++        nrl[node] = right;
++        final int nextAxis = axis == 1 ? 0 : axis + 1;
++        buildNode(offset, leftCount, nextAxis, node + 1);
++        buildNode(offset + leftCount, count - leftCount, nextAxis, right);
+     }
+ 
+     private void ensureSearch(final int length, final int nodeLen) {
+@@ -74,29 +93,23 @@ public final class KDTree2D {
+         search[0] = length == 0 ? SENTINEL : 0;
+     }
+ 
+-    private void ensureConstruct(final int st) {
+-        if (st != stack.length && st + 1 != stack.length) {
+-            return;
++    private void growPoints() {
++        final int capacity = Math.max(INITIAL_CAPACITY, size + (size >> 1));
++        for (int axis = 0; axis < points.length; axis++) {
++            points[axis] = java.util.Arrays.copyOf(points[axis], capacity);
+         }
+-        final int newLen = stack.length + 2;
+-        final Node[] b = new Node[Math.max(INITIAL_CAPACITY, newLen + (newLen >> 1))];
+-        System.arraycopy(stack, 0, b, 0, st);
+-        stack = b;
++        indices = new int[capacity];
+     }
+ 
+-    private void ensureNode(final int preserve) {
+-        int length = preserve + 1;
+-        if (length < nrl.length) {
++    private void ensureNodeCapacity(final int required) {
++        if (nrl.length >= required) {
+             return;
+         }
+-        length += length >> 1;
+-        if (length < INITIAL_CAPACITY) {
+-            length = INITIAL_CAPACITY;
+-        }
+-        nrl = it.unimi.dsi.fastutil.ints.IntArrays.forceCapacity(nrl, length, preserve);
+-        nxl = it.unimi.dsi.fastutil.doubles.DoubleArrays.forceCapacity(nxl, length, preserve);
+-        nyl = it.unimi.dsi.fastutil.doubles.DoubleArrays.forceCapacity(nyl, length, preserve);
+-        nil = it.unimi.dsi.fastutil.ints.IntArrays.forceCapacity(nil, length, preserve);
++        final int capacity = Math.max(INITIAL_CAPACITY, required + (required >> 1));
++        nrl = new int[capacity];
++        nxl = new double[capacity];
++        nyl = new double[capacity];
++        nil = new int[capacity];
+     }
+ 
+     private static double euclideanDistanceSquared(double dx, double dy) {
+@@ -253,6 +266,4 @@ public final class KDTree2D {
+         return nearest;
+     }
+ 
+-    private record Node(int parent, boolean left, int offset, int len, int depth) {
+-    }
+ }
+diff --git a/java/org/dreeam/leaf/util/KDTree3D.java b/java/org/dreeam/leaf/util/KDTree3D.java
+index 237b961d1472fcd046634ef0a2e1c4db78c69538..34e5dea7222ac377038011e26fd45a5ce00f0c06 100644
+--- a/java/org/dreeam/leaf/util/KDTree3D.java
++++ b/java/org/dreeam/leaf/util/KDTree3D.java
+@@ -4,7 +4,6 @@ public final class KDTree3D {
+ 
+     private static final double[] EMPTY_DOUBLES = {};
+     private static final int[] EMPTY_INTS = {};
+-    private static final Node[] EMPTY_NODES = {};
+     private static final boolean ENABLE_FMA = LeafConstants.ENABLE_FMA;
+ 
+     private static final int INITIAL_CAPACITY = 8;
+@@ -12,7 +11,6 @@ public final class KDTree3D {
+     /// indicate empty on [#search]
+     /// indicate leaf node on [#nrl]
+     private static final int SENTINEL = -1;
+-    private Node[] stack = EMPTY_NODES;
+     private int[] search = EMPTY_INTS;
+     /// [#SENTINEL] for leaf / right node index for internal
+     private int[] nrl = EMPTY_INTS;
+@@ -24,50 +22,72 @@ public final class KDTree3D {
+     private double[] nzl = EMPTY_DOUBLES;
+     // index for leaf
+     private int[] nil = EMPTY_INTS;
++    // Pyzh - Reuse point and index buffers across rebuilds.
++    private final double[][] points = {EMPTY_DOUBLES, EMPTY_DOUBLES, EMPTY_DOUBLES};
++    private int[] indices = EMPTY_INTS;
++    private int size;
+ 
+     public void build(final double[][] coords, final int[] indices) {
+-        if (indices.length == 0 || coords.length != 3) {
+-            ensureSearch(0, 0);
++        this.clear();
++        for (int i = 0; i < indices.length; i++) {
++            this.add(coords[0][i], coords[1][i], coords[2][i]);
++        }
++        this.build();
++    }
++
++    // Pyzh - Fill with add() between clear() and build() so rebuilds reuse buffers.
++    public void clear() {
++        this.size = 0;
++    }
++
++    /// [#nearestIdx] identifies points by the order they were added since [#clear].
++    public void add(final double x, final double y, final double z) {
++        if (size == indices.length) {
++            growPoints();
++        }
++        points[0][size] = x;
++        points[1][size] = y;
++        points[2][size] = z;
++        size++;
++    }
++
++    public void build() {
++        ensureSearch(0, 0); // Queries see an empty tree if construction fails.
++        if (size == 0) {
+             return;
+         }
+-        for (int i = 0; i < indices.length; i++) {
++        for (int i = 0; i < size; i++) {
+             indices[i] = i;
+         }
+ 
+-        int st = 0;
+-        ensureConstruct(st);
+-        stack[st++] = new Node(SENTINEL, false, 0, indices.length, 0);
+-        int nodeLen = 0;
+-        while (st != 0) {
+-            ensureNode(nodeLen);
+-            final Node n = stack[--st];
+-            final int curr = nodeLen++;
+-            if (n.len() <= 1) {
+-                final int p = indices[n.offset()];
+-                nrl[curr] = SENTINEL;
+-                nxl[curr] = coords[0][p];
+-                nyl[curr] = coords[1][p];
+-                nzl[curr] = coords[2][p];
+-                nil[curr] = p;
+-            } else {
+-                final int axis = (n.depth()) % 3;
+-                final int med = (n.len() - 1) / 2;
+-                final int k = n.offset() + med;
+-                final double[] coord = coords[axis];
+-                PartialSort.nthElement(indices, coord, n.offset(), n.offset() + n.len() - 1, k);
+-
+-                nxl[curr] = coord[indices[k]];
++        final int nodeCount = 2 * size - 1;
++        ensureNodeCapacity(nodeCount);
++        buildNode(0, size, 0, 0);
++        ensureSearch(size, nodeCount);
++    }
+ 
+-                ensureConstruct(st);
+-                stack[st++] = new Node(curr, false, n.offset() + med + 1, n.len() - med - 1, n.depth() + 1);
+-                stack[st++] = new Node(curr, true, n.offset(), med + 1, n.depth() + 1);
+-            }
+-            if (n.parent() != SENTINEL) {
+-                nrl[n.parent()] = n.left() ? SENTINEL : curr;
+-            }
++    // Pyzh - Balanced recursion has logarithmic depth and avoids a temporary object per tree node.
++    private void buildNode(final int offset, final int count, final int axis, final int node) {
++        if (count == 1) {
++            final int point = indices[offset];
++            nrl[node] = SENTINEL;
++            nxl[node] = points[0][point];
++            nyl[node] = points[1][point];
++            nzl[node] = points[2][point];
++            nil[node] = point;
++            return;
+         }
+ 
+-        ensureSearch(indices.length, nodeLen);
++        final int leftCount = (count + 1) >>> 1;
++        final int median = offset + leftCount - 1;
++        PartialSort.nthElement(indices, points[axis], offset, offset + count - 1, median);
++        nxl[node] = points[axis][indices[median]];
++        // A subtree with n points occupies 2n - 1 nodes; the right subtree follows the left.
++        final int right = node + 2 * leftCount;
++        nrl[node] = right;
++        final int nextAxis = axis == 2 ? 0 : axis + 1;
++        buildNode(offset, leftCount, nextAxis, node + 1);
++        buildNode(offset + leftCount, count - leftCount, nextAxis, right);
+     }
+ 
+     private void ensureSearch(final int length, final int nodeLen) {
+@@ -77,30 +97,24 @@ public final class KDTree3D {
+         search[0] = length == 0 ? SENTINEL : 0;
+     }
+ 
+-    private void ensureConstruct(final int st) {
+-        if (st != stack.length && st + 1 != stack.length) {
+-            return;
++    private void growPoints() {
++        final int capacity = Math.max(INITIAL_CAPACITY, size + (size >> 1));
++        for (int axis = 0; axis < points.length; axis++) {
++            points[axis] = java.util.Arrays.copyOf(points[axis], capacity);
+         }
+-        final int newLen = stack.length + 2;
+-        final Node[] b = new Node[Math.max(INITIAL_CAPACITY, newLen + (newLen >> 1))];
+-        System.arraycopy(stack, 0, b, 0, st);
+-        stack = b;
++        indices = new int[capacity];
+     }
+ 
+-    private void ensureNode(final int preserve) {
+-        int length = preserve + 1;
+-        if (length < nrl.length) {
++    private void ensureNodeCapacity(final int required) {
++        if (nrl.length >= required) {
+             return;
+         }
+-        length += length >> 1;
+-        if (length < INITIAL_CAPACITY) {
+-            length = INITIAL_CAPACITY;
+-        }
+-        nrl = it.unimi.dsi.fastutil.ints.IntArrays.forceCapacity(nrl, length, preserve);
+-        nxl = it.unimi.dsi.fastutil.doubles.DoubleArrays.forceCapacity(nxl, length, preserve);
+-        nyl = it.unimi.dsi.fastutil.doubles.DoubleArrays.forceCapacity(nyl, length, preserve);
+-        nzl = it.unimi.dsi.fastutil.doubles.DoubleArrays.forceCapacity(nzl, length, preserve);
+-        nil = it.unimi.dsi.fastutil.ints.IntArrays.forceCapacity(nil, length, preserve);
++        final int capacity = Math.max(INITIAL_CAPACITY, required + (required >> 1));
++        nrl = new int[capacity];
++        nxl = new double[capacity];
++        nyl = new double[capacity];
++        nzl = new double[capacity];
++        nil = new int[capacity];
+     }
+ 
+     private static double euclideanDistanceSquared(double dx, double dy, double dz) {
+@@ -263,6 +277,4 @@ public final class KDTree3D {
+         return nearest;
+     }
+ 
+-    private record Node(int parent, boolean left, int offset, int len, int depth) {
+-    }
+ }
+diff --git a/java/org/dreeam/leaf/world/DespawnMap.java b/java/org/dreeam/leaf/world/DespawnMap.java
+index 5d3ce13a323c96e51e015c6e7ccfc6e5d6867912..db90d7724c61fac8108207f4f4649149fbb801bc 100644
+--- a/java/org/dreeam/leaf/world/DespawnMap.java
++++ b/java/org/dreeam/leaf/world/DespawnMap.java
+@@ -71,21 +71,19 @@ public final class DespawnMap implements Consumer<Entity> {
+             }
+         }
+         final ServerPlayer[] players = world.players().toArray(EMPTY_PLAYERS);
+-        final double[] playerX = new double[players.length];
+-        final double[] playerY = new double[players.length];
+-        final double[] playerZ = new double[players.length];
++        // Pyzh start - Reuse tree buffers across ticks.
++        tree.clear();
+         int i = 0;
+         for (int j = 0; j < players.length; j++) {
+             final ServerPlayer p = players[j];
+             if (EntitySelector.PLAYER_AFFECTS_SPAWNING.test(p)) {
+-                playerX[i] = p.getX();
+-                playerY[i] = p.getY();
+-                playerZ[i] = p.getZ();
++                tree.add(p.getX(), p.getY(), p.getZ());
+                 players[i] = p;
+                 i++;
+             }
+         }
+-        tree.build(new double[][]{playerX, playerY, playerZ}, new int[i]);
++        tree.build();
++        // Pyzh end - Reuse tree buffers across ticks.
+         entityTickList.forEach(this);
+         return true;
+     }
+diff --git a/java/org/dreeam/leaf/world/EntityActivation.java b/java/org/dreeam/leaf/world/EntityActivation.java
+index 67f5bb761bb669e3d77f59efa308407102c1c6af..b2bfc015982114defff19ee203a6276c4b2c965b 100644
+--- a/java/org/dreeam/leaf/world/EntityActivation.java
++++ b/java/org/dreeam/leaf/world/EntityActivation.java
+@@ -25,6 +25,7 @@ public final class EntityActivation {
+     private final LongOpenHashSet chunks = new LongOpenHashSet();
+     private final KDTree2D kdTree2 = new KDTree2D();
+     private final KDTree3D kdTree3 = new KDTree3D();
++    private final double[] activationRanges = new double[ACTIVATION_TYPES.length]; // Pyzh - Reuse across ticks.
+ 
+     public void activateEntities(ServerLevel world) {
+         final int miscActivationRange = world.spigotConfig.miscActivationRange;
+@@ -48,7 +49,7 @@ public final class EntityActivation {
+         maxRange = Math.max(maxRange, villagerActivationRange);
+         maxRange = Math.min((world.spigotConfig.simulationDistance << 4) - 8, maxRange);
+ 
+-        final double[] ranges = new double[ACTIVATION_TYPES.length];
++        final double[] ranges = this.activationRanges;
+         ranges[ActivationType.WATER.ordinal()] = waterActivationRange;
+         ranges[ActivationType.FLYING_MONSTER.ordinal()] = flyingActivationRange;
+         ranges[ActivationType.VILLAGER.ordinal()] = villagerActivationRange;
+@@ -72,9 +73,10 @@ public final class EntityActivation {
+         final boolean dab = DynamicActivationofBrain.enabled;
+         int playerSize = 0;
+         final ServerPlayer[] players = world.players().toArray(EMPTY_PLAYERS);
+-        final double[] pxl = new double[players.length];
+-        final double[] pyl = new double[players.length];
+-        final double[] pzl = new double[players.length];
++        // Pyzh start - Reuse tree buffers across ticks.
++        kdTree2.clear();
++        kdTree3.clear();
++        // Pyzh end - Reuse tree buffers across ticks.
+         for (int i = 0; i < players.length; i++) {
+             final ServerPlayer p = players[i];
+             p.activatedTick = currentTick;
+@@ -85,9 +87,10 @@ public final class EntityActivation {
+                 continue; // Purpur - AFK API
+             }
+             players[playerSize] = p;
+-            pxl[playerSize] = p.getX();
+-            pyl[playerSize] = p.getY();
+-            pzl[playerSize] = p.getZ();
++            // Pyzh start - Reuse tree buffers across ticks.
++            kdTree2.add(p.getX(), p.getZ());
++            if (dab) kdTree3.add(p.getX(), p.getY(), p.getZ());
++            // Pyzh end - Reuse tree buffers across ticks.
+             playerSize++;
+         }
+ 
+@@ -97,9 +100,8 @@ public final class EntityActivation {
+             return;
+         }
+ 
+-        final int[] indices = new int[playerSize];
+-        kdTree2.build(new double[][]{pxl, pzl}, indices);
+-        if (dab) kdTree3.build(new double[][]{pxl, pyl, pzl}, indices);
++        kdTree2.build(); // Pyzh - Reuse tree buffers across ticks.
++        if (dab) kdTree3.build(); // Pyzh - Reuse tree buffers across ticks.
+ 
+         final double worldHeight = world.getHeight();
+         getEntities(world, players, playerSize, maxRange, worldHeight, lookup, chunks, entities);
+diff --git a/java/org/dreeam/leaf/world/NatureSpawnChunkMap.java b/java/org/dreeam/leaf/world/NatureSpawnChunkMap.java
+index e7dc38066e012a2e3288722810451ba78c02e520..363da73c221ea457001bce3a1569e3d4590df1c3 100644
+--- a/java/org/dreeam/leaf/world/NatureSpawnChunkMap.java
++++ b/java/org/dreeam/leaf/world/NatureSpawnChunkMap.java
+@@ -154,19 +154,15 @@ public final class NatureSpawnChunkMap {
+     }
+ 
+     private void buildKdTree(final boolean ignoreCreativePlayers, final ServerPlayer[] players) {
+-        double[] pxl = new double[players.length];
+-        double[] pyl = new double[players.length];
+-        double[] pzl = new double[players.length];
+-        int i = 0;
++        // Pyzh start - Reuse tree buffers across ticks.
++        this.tree.clear();
+         for (final ServerPlayer p : players) {
+             if (!p.isSpectator() && !(ignoreCreativePlayers && p.isCreative())) {
+-                pxl[i] = p.getX();
+-                pyl[i] = p.getY();
+-                pzl[i] = p.getZ();
+-                i++;
++                this.tree.add(p.getX(), p.getY(), p.getZ());
+             }
+         }
+-        this.tree.build(new double[][]{pxl, pyl, pzl}, new int[i]);
++        this.tree.build();
++        // Pyzh end - Reuse tree buffers across ticks.
+     }
+ 
+     private static void collectSpawningChunks(final ChunkCache<LevelChunk> chunks,
