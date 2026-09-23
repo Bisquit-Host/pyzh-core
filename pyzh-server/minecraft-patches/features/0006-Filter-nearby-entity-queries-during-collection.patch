@@ -84,13 +84,13 @@ index cc6f4e2845ef1e95c765d65f17c8aa1b06652927..385580def510bbbac710c61713fd3a2f
      }
  }
 diff --git a/net/minecraft/world/entity/ai/goal/AvoidEntityGoal.java b/net/minecraft/world/entity/ai/goal/AvoidEntityGoal.java
-index b0a85216ed0ef88bdf8d7648713f1f67c32873b7..69abfba3a9033491142701169718822eae74658d 100644
+index a4dc4aa51f3ebcc96d1b6007fc70b7cc168cb1eb..877807f5c1f67493c07bbb06a1b3e9308e37738a 100644
 --- a/net/minecraft/world/entity/ai/goal/AvoidEntityGoal.java
 +++ b/net/minecraft/world/entity/ai/goal/AvoidEntityGoal.java
 @@ -69,15 +69,23 @@ public class AvoidEntityGoal<T extends LivingEntity> extends Goal {
      @Override
      public boolean canUse() {
-         leaf$counter++; if (leaf$counter < leaf$internal) { return false; } else { leaf$counter = this.mob.getRandom().nextInt(leaf$internal); } // Leaf - configurable goal update interval
+         if (leaf$internal > 1) { leaf$counter++; if (leaf$counter < leaf$internal) { return false; } else { leaf$counter = this.mob.getRandom().nextInt(leaf$internal); } } // Leaf - configurable goal update interval
 -        this.toAvoid = getServerLevel(this.mob)
 +        // Pyzh start - filter nearby entity queries during spatial collection
 +        // See ServerEntityGetter#getNearestEntity(Class, ...) for why this is safe inside the scan.
@@ -178,10 +178,10 @@ index 5840088eb7a34fb925ee0dfb9575546f0f8d15f7..6cea53fc207203e2216adf6d97673068
              this.target = level.getNearestPlayer(this.getTargetConditions(), this.mob, this.mob.getX(), this.mob.getEyeY(), this.mob.getZ());
          }
 diff --git a/net/minecraft/world/entity/animal/panda/Panda.java b/net/minecraft/world/entity/animal/panda/Panda.java
-index 958ad044a9d303cbe9da62c5609116244085e841..1f6ab743e070424c0c1051112e8eab361b1c47b0 100644
+index ef5e42eeb1c03167a1ca7765483f804498f8e0ec..e42bb5dbf9e31940ec332aafb9dda3649e0edf85 100644
 --- a/net/minecraft/world/entity/animal/panda/Panda.java
 +++ b/net/minecraft/world/entity/animal/panda/Panda.java
-@@ -1004,16 +1004,21 @@ public class Panda extends Animal {
+@@ -1021,16 +1021,21 @@ public class Panda extends Animal {
                  if (this.lookAtType == Player.class) {
                      this.lookAt = level.getNearestPlayer(this.lookAtContext, this.mob, this.mob.getX(), this.mob.getEyeY(), this.mob.getZ());
                  } else {

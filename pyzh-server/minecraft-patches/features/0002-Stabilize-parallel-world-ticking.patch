@@ -6,10 +6,10 @@ Subject: [PATCH] Stabilize parallel world ticking
 Join every submitted world tick before propagating failures and serialize buffered-read admission with world closure.
 
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
-index b651f781dc3cd6c7fc0abd76971218e679ae9772..c5fbf3c6b6a82e3cf6dab23e842e1d42a0f65281 100644
+index dd55fbb07c5ff763eae7570f6cb06df17daf5844..36a766c57d78a906b461bde2c197d9ba877ab4eb 100644
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -1939,50 +1939,97 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1937,50 +1937,97 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
  
          this.isIteratingOverLevels = true; // Paper - Throw exception on world create while being ticked
          // Leaf start - SparklyPaper - parallel world ticking
@@ -146,7 +146,7 @@ index b651f781dc3cd6c7fc0abd76971218e679ae9772..c5fbf3c6b6a82e3cf6dab23e842e1d42
          if (org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled) { for (ServerLevel world : getAllLevels()) { world.leaf$asyncTracker.onTickEnd(); } } // Leaf - Multithreaded tracker
  
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index 908adae851185b48b8dc4ba2e7efad02402fba04..9932c13fc4c59cab0fc83ef0f3683f68e4447062 100644
+index 8ab5d05bd88acfa21bc0237e3556b441c5425dea..6536adbf3092c526d0da8cbd5c6b66ac05ba85dd 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
 @@ -224,6 +224,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet

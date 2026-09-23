@@ -6,10 +6,10 @@ Subject: [PATCH] Fix critical entity lifecycle defects
 Bound ceiling-dimension trader spawn searches and retain weak-loaded entities until removal succeeds.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
-index f27f198e84ac668446c9d57772343ba10464428c..3645ef969b8af3af4071c0685f569d3a343bcc57 100644
+index 2a9032f8fe5424d3795093dfa8bd79ef4534b835..9ad4c721dd59fde433e6a8edb193717fda1418e1 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
-@@ -970,8 +970,10 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+@@ -1056,8 +1056,10 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
  
              if (entity.isExceedingDespawnTime(true)) {
                  entity.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.DESPAWN);

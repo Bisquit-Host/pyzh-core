@@ -259,10 +259,10 @@ index 501d135afd490c2ca278eb3842dbd3e7037c2aae..18a683c8ad9f2db3f21416c2835e5b00
              LOGGER.info("Waiting for entity tracker executor to shutdown...");
              AsyncTracker.TRACKER_EXECUTOR.shutdown();
 diff --git a/java/org/dreeam/leaf/config/modules/async/AsyncPlayerDataSave.java b/java/org/dreeam/leaf/config/modules/async/AsyncPlayerDataSave.java
-index c87908e2323bb7732b7b3d4ea094254054e0f31d..3e790aff014c452c232add40d570e31d639c13c8 100644
+index 141ec7385b897df9e9cbcccce09578c84392830e..909b81182fd3bdba0aac2880557358f90c2e3d2a 100644
 --- a/java/org/dreeam/leaf/config/modules/async/AsyncPlayerDataSave.java
 +++ b/java/org/dreeam/leaf/config/modules/async/AsyncPlayerDataSave.java
-@@ -10,6 +10,7 @@ public class AsyncPlayerDataSave extends ConfigModules {
+@@ -10,6 +10,7 @@ public class AsyncPlayerDataSave extends ConfigModule {
      }
  
      public static boolean enabled = false;
@@ -270,15 +270,15 @@ index c87908e2323bb7732b7b3d4ea094254054e0f31d..3e790aff014c452c232add40d570e31d
  
      @Override
      public void onLoaded() {
-@@ -18,10 +19,15 @@ public class AsyncPlayerDataSave extends ConfigModules {
+@@ -18,10 +19,15 @@ public class AsyncPlayerDataSave extends ConfigModule {
              """
                  异步保存玩家数据.""");
  
--        enabled = config.getBoolean(getBasePath() + ".enabled", enabled);
+-        enabled = globalConfig.getBoolean(basePath() + ".enabled", enabled);
 -
 -        if (enabled) {
 -            org.dreeam.leaf.async.AsyncPlayerDataSaving.init();
-+        final boolean configuredEnabled = config.getBoolean(getBasePath() + ".enabled", enabled);
++        final boolean configuredEnabled = globalConfig.getBoolean(basePath() + ".enabled", enabled);
 +        if (!runtimeConfigurationInitialized) {
 +            enabled = configuredEnabled;
 +            runtimeConfigurationInitialized = true;
@@ -286,15 +286,15 @@ index c87908e2323bb7732b7b3d4ea094254054e0f31d..3e790aff014c452c232add40d570e31d
 +                org.dreeam.leaf.async.AsyncPlayerDataSaving.init();
 +            }
 +        } else if (enabled != configuredEnabled) {
-+            org.dreeam.leaf.config.LeafConfig.LOGGER.warn("The setting '{}.enabled' is startup-only; keeping enabled={} until restart.", getBasePath(), enabled);
++            org.dreeam.leaf.config.LeafConfig.LOGGER.warn("The setting '{}.enabled' is startup-only; keeping enabled={} until restart.", basePath(), enabled);
          }
      }
  }
 diff --git a/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java b/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java
-index f1122658920dff52b008bb777ece9d8879220082..0796318be16d88158ebfbf964b4d4e17120af4ce 100644
+index 37949132f4fe7c1b9ed6f64b5b87ab4dac1dc17f..e151ac52470bd174eb6f2cbd8a2c091644967751 100644
 --- a/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java
 +++ b/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java
-@@ -15,11 +15,12 @@ public class SparklyPaperParallelWorldTicking extends ConfigModules {
+@@ -15,11 +15,12 @@ public class SparklyPaperParallelWorldTicking extends ConfigModule {
      @Experimental
      public static boolean enabled = false;
      public static int threads = 8;
@@ -308,23 +308,23 @@ index f1122658920dff52b008bb777ece9d8879220082..0796318be16d88158ebfbf964b4d4e17
  
      @Override
      public void onLoaded() {
-@@ -30,18 +31,26 @@ public class SparklyPaperParallelWorldTicking extends ConfigModules {
+@@ -30,18 +31,26 @@ public class SparklyPaperParallelWorldTicking extends ConfigModule {
                  **实验性功能**
                  启用并行世界处理以提高多核 CPU 使用率.""");
  
--        enabled = config.getBoolean(getBasePath() + ".enabled", enabled);
--        threads = config.getInt(getBasePath() + ".threads", threads);
+-        enabled = globalConfig.getBoolean(basePath() + ".enabled", enabled);
+-        threads = globalConfig.getInt(basePath() + ".threads", threads);
 -        if (enabled) {
 -            if (threads <= 0) threads = 8;
-+        final boolean configuredEnabled = config.getBoolean(getBasePath() + ".enabled", enabled);
-+        int configuredThreads = config.getInt(getBasePath() + ".threads", threads);
++        final boolean configuredEnabled = globalConfig.getBoolean(basePath() + ".enabled", enabled);
++        int configuredThreads = globalConfig.getInt(basePath() + ".threads", threads);
 +        if (configuredEnabled) {
 +            if (configuredThreads <= 0) configuredThreads = 8;
          } else {
 -            threads = 0;
 +            configuredThreads = 0;
 +        }
-+        final boolean configuredDisableHardThrow = configuredEnabled && config.getBoolean(getBasePath() + ".disable-hard-throw", disableHardThrow);
++        final boolean configuredDisableHardThrow = configuredEnabled && globalConfig.getBoolean(basePath() + ".disable-hard-throw", disableHardThrow);
 +
 +        if (!runtimeConfigurationInitialized) {
 +            enabled = configuredEnabled;
@@ -332,13 +332,13 @@ index f1122658920dff52b008bb777ece9d8879220082..0796318be16d88158ebfbf964b4d4e17
 +            disableHardThrow = configuredDisableHardThrow;
 +            runtimeConfigurationInitialized = true;
 +        } else if (enabled != configuredEnabled || threads != configuredThreads || disableHardThrow != configuredDisableHardThrow) {
-+            LeafConfig.LOGGER.warn("The settings '{}.enabled', '{}.threads', and '{}.disable-hard-throw' are startup-only; keeping enabled={}, threads={}, and disable-hard-throw={} until restart.", getBasePath(), getBasePath(), getBasePath(), enabled, threads, disableHardThrow);
++            LeafConfig.LOGGER.warn("The settings '{}.enabled', '{}.threads', and '{}.disable-hard-throw' are startup-only; keeping enabled={}, threads={}, and disable-hard-throw={} until restart.", basePath(), basePath(), basePath(), enabled, threads, disableHardThrow);
          }
  
-         logContainerCreationStacktraces = config.getBoolean(getBasePath() + ".log-container-creation-stacktraces", logContainerCreationStacktraces);
+         logContainerCreationStacktraces = globalConfig.getBoolean(basePath() + ".log-container-creation-stacktraces", logContainerCreationStacktraces);
          logContainerCreationStacktraces = enabled && logContainerCreationStacktraces;
--        disableHardThrow = config.getBoolean(getBasePath() + ".disable-hard-throw", disableHardThrow);
+-        disableHardThrow = globalConfig.getBoolean(basePath() + ".disable-hard-throw", disableHardThrow);
 -        disableHardThrow = enabled && disableHardThrow;
-         asyncUnsafeReadHandling = UnsafeReadPolicy.fromString(config.getString(getBasePath() + ".async-unsafe-read-handling", asyncUnsafeReadHandling.toString()));
+         asyncUnsafeReadHandling = UnsafeReadPolicy.fromString(globalConfig.getString(basePath() + ".async-unsafe-read-handling", asyncUnsafeReadHandling.toString()));
  
          // Transfer old config

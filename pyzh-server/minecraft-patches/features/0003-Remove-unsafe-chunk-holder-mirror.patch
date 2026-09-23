@@ -6,7 +6,7 @@ Subject: [PATCH] Remove unsafe chunk holder mirror
 Use Moonrise's canonical concurrent holder table because asynchronous ticket propagation may create holders from non-owner threads.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
-index c6f85843300a914ea5ca210f0fd4198a3bc67b23..a6587693515dd17e5308207a93ab4ac73f362b83 100644
+index a2bccd6a339a5faf64f2b5d47b7aacc3f848e541..cba3b800d2b5dd80164c2b5d742b28af112cf109 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
 @@ -80,7 +80,6 @@ public final class ChunkHolderManager {
@@ -82,10 +82,10 @@ index c6f85843300a914ea5ca210f0fd4198a3bc67b23..a6587693515dd17e5308207a93ab4ac7
  
      // note: never call while inside the chunk system, this will absolutely break everything
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
-index c5fbf3c6b6a82e3cf6dab23e842e1d42a0f65281..11ded8fc26563335d762410f803782d5ebf9d6d1 100644
+index 36a766c57d78a906b461bde2c197d9ba877ab4eb..31d2e284a6c44de67de10c122875e76f76be9451 100644
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -1959,7 +1959,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1957,7 +1957,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
                      try {
                          future = level.tickExecutor.submit(() -> {
                              level.getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map
@@ -93,7 +93,7 @@ index c5fbf3c6b6a82e3cf6dab23e842e1d42a0f65281..11ded8fc26563335d762410f803782d5
                              ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread currentThread = (ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread) Thread.currentThread();
                              currentThread.currentTickingServerLevel = level;
                              try {
-@@ -2013,7 +2012,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -2011,7 +2010,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
                      }
                  }
                  task.level().getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map

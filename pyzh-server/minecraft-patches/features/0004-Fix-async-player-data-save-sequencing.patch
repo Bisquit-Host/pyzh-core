@@ -6,10 +6,10 @@ Subject: [PATCH] Fix async player data save sequencing
 Sequence saves per UUID without blocking the caller, isolate level data I/O, serve pending snapshots to readers, and drain accepted writes before storage shutdown.
 
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
-index 11ded8fc26563335d762410f803782d5ebf9d6d1..42b26fc4f8d499a5a8cfc3b261d2f45315ee6359 100644
+index 31d2e284a6c44de67de10c122875e76f76be9451..1a548c13eff115054b5ce4ad73f4e069f7fc8362 100644
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -1136,6 +1136,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1134,6 +1134,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
  
          this.saveAllChunks(false, true, false, true); // Paper - rewrite chunk system
  
