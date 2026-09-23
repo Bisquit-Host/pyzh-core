@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Wed, 23 Sep 2026 15:22:23 +0300
+Subject: [PATCH] Use Paper matcher for custom shapeless ingredients
+
+
+diff --git a/net/minecraft/world/item/crafting/ShapelessRecipe.java b/net/minecraft/world/item/crafting/ShapelessRecipe.java
+index e8b9e5f49e498c8ba059cdb4a25f6273668e2c72..0604adcf74bff94fc3fbdf357d60c5fcbd40cfc5 100644
+--- a/net/minecraft/world/item/crafting/ShapelessRecipe.java
++++ b/net/minecraft/world/item/crafting/ShapelessRecipe.java
+@@ -38,7 +38,8 @@ public class ShapelessRecipe extends NormalCraftingRecipe {
+     public static final RecipeSerializer<ShapelessRecipe> SERIALIZER = new RecipeSerializer<>(MAP_CODEC, STREAM_CODEC);
+     private final ItemStackTemplate result;
+     private final List<Ingredient> ingredients;
+-    private final boolean isBukkit; // Gale - Airplane - simpler ShapelessRecipe comparison for vanilla
++    // Pyzh - Custom ingredients need Paper's matcher even when the recipe did not come from Bukkit.
++    private final boolean useSimpleMatching;
+ 
+     public ShapelessRecipe(
+         final Recipe.CommonInfo commonInfo, final CraftingRecipe.CraftingBookInfo bookInfo, final ItemStackTemplate result, final List<Ingredient> ingredients
+@@ -47,7 +48,7 @@ public class ShapelessRecipe extends NormalCraftingRecipe {
+         this(commonInfo, bookInfo, result, ingredients, false);
+     }
+     public ShapelessRecipe(final Recipe.CommonInfo commonInfo, final CraftingRecipe.CraftingBookInfo bookInfo, final ItemStackTemplate result, final List<Ingredient> ingredients, boolean isBukkit) {
+-        this.isBukkit = isBukkit;
++        this.useSimpleMatching = !isBukkit && ingredients.stream().noneMatch(ingredient -> ingredient.isExact() || ingredient.stackPredicate != null || ingredient.predicate != null);
+         // Gale end - Airplane - simpler ShapelessRecipe comparison for vanilla
+         super(commonInfo, bookInfo);
+         this.result = result;
+@@ -82,7 +83,7 @@ public class ShapelessRecipe extends NormalCraftingRecipe {
+     @Override
+     public boolean matches(final CraftingInput input, final Level level) {
+         // Gale start - Airplane - simpler ShapelessRecipe comparison for vanilla
+-        if (!this.isBukkit) {
++        if (this.useSimpleMatching) {
+             List<Ingredient> ingredients = com.google.common.collect.Lists.newArrayList(this.ingredients.toArray(new Ingredient[0]));
+ 
+             inventory:
