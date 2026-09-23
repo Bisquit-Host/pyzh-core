@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Wed, 23 Sep 2026 21:06:58 +0300
+Subject: [PATCH] Finish async village paths on a later goal check
+
+MoveThroughVillageGoal read the node count right after creating the
+path, forcing async pathfinding to run on the main thread. The goal now
+keeps the unfinished path and consumes it on its next check, as Leaf's
+AcquirePoi does, then applies the same door truncation.
+
+diff --git a/net/minecraft/world/entity/ai/goal/MoveThroughVillageGoal.java b/net/minecraft/world/entity/ai/goal/MoveThroughVillageGoal.java
+index 990a48550fc285dfcbaa536c87be781e3c68195f..edfcfc17684960b97c80fb57bd1708db27352abf 100644
+--- a/net/minecraft/world/entity/ai/goal/MoveThroughVillageGoal.java
++++ b/net/minecraft/world/entity/ai/goal/MoveThroughVillageGoal.java
+@@ -30,6 +30,7 @@ public class MoveThroughVillageGoal extends Goal {
+     private final List<BlockPos> visited = Lists.newArrayList();
+     private final int distanceToPoi;
+     private final BooleanSupplier canDealWithDoors;
++    private org.dreeam.leaf.async.path.@Nullable AsyncPath pendingPath; // Pyzh - Finish async village paths on a later check
+ 
+     public MoveThroughVillageGoal(
+         final PathfinderMob mob, final double speedModifier, final boolean onlyAtNight, final int distanceToPoi, final BooleanSupplier canDealWithDoors
+@@ -53,9 +54,19 @@ public class MoveThroughVillageGoal extends Goal {
+ 
+         this.updateVisited();
+         if (this.onlyAtNight && this.mob.level().isBrightOutside()) {
++            this.pendingPath = null; // Pyzh - Finish async village paths on a later check
+             return false;
+         }
+ 
++        // Pyzh start - Finish async village paths on a later check
++        if (this.pendingPath != null) {
++            this.pendingPath.process(); // Usually finished by a worker since the previous check
++            this.path = this.pendingPath;
++            this.pendingPath = null;
++            return this.stopBeforeDoors();
++        }
++        // Pyzh end - Finish async village paths on a later check
++
+         ServerLevel level = (ServerLevel)this.mob.level();
+         BlockPos pos = this.mob.blockPosition();
+         if (!level.isCloseToVillage(pos, 6)) {
+@@ -105,6 +116,18 @@ public class MoveThroughVillageGoal extends Goal {
+             }
+         }
+ 
++        // Pyzh start - Finish async village paths on a later check
++        if (this.path instanceof org.dreeam.leaf.async.path.AsyncPath asyncPath && !asyncPath.isProcessed()) {
++            this.pendingPath = asyncPath;
++            this.path = null;
++            return false;
++        }
++
++        return this.stopBeforeDoors();
++    }
++
++    private boolean stopBeforeDoors() {
++        // Pyzh end - Finish async village paths on a later check
+         for (int i = 0; i < this.path.getNodeCount(); i++) {
+             Node node = this.path.getNode(i);
+             BlockPos doorPos = new BlockPos(node.x, node.y + 1, node.z);

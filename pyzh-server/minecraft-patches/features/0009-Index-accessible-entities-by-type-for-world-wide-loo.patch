@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Wed, 23 Sep 2026 21:06:58 +0300
+Subject: [PATCH] Index accessible entities by type for world-wide lookups
+
+Typed world-wide lookups such as @e[type=marker] selectors without a
+distance scanned every entity by id, checking chunk status and type for
+each. Accessible entities are now also kept per type, maintained with
+the existing accessible list under the same lock, so these lookups only
+visit entities of the requested type. Other type tests keep the scan.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+index 75c2168451ab042c3e32001b290af9585ef8f537..78063fd1dd8856c9b8069a730915c931624957b5 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+@@ -51,6 +51,8 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+     protected final ConcurrentChainedLong2ReferenceHashTable<Entity> entityById = new ConcurrentChainedLong2ReferenceHashTable<>();
+     protected final ConcurrentHashMap<UUID, Entity> entityByUUID = new ConcurrentHashMap<>();
+     protected final EntityList accessibleEntities = new EntityList();
++    // Pyzh - Guarded by accessibleEntities. Lets typed world-wide lookups such as @e[type=...] skip other entity types.
++    private final it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<EntityType<?>, EntityList> accessibleEntitiesByType = new it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<>();
+     public final it.unimi.dsi.fastutil.objects.ReferenceArrayList<Entity> weakEntityList = new it.unimi.dsi.fastutil.objects.ReferenceArrayList<>(); // Leaf - Rewrite entity despawn time
+ 
+     public EntityLookup(final Level world, final LevelCallback<Entity> worldCallback) {
+@@ -211,6 +213,25 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+ 
+     @Override
+     public <U extends Entity> void get(final EntityTypeTest<Entity, U> filter, final AbortableIterationConsumer<U> action) {
++        // Pyzh start - Index accessible entities by type
++        if (filter instanceof EntityType<?> type) {
++            final Entity[] entities;
++            synchronized (this.accessibleEntities) {
++                final EntityList ofType = this.accessibleEntitiesByType.get(type);
++                if (ofType == null) {
++                    return;
++                }
++                entities = Arrays.copyOf(ofType.getRawData(), ofType.size());
++            }
++            for (final Entity entity : entities) {
++                final U casted = filter.tryCast(entity);
++                if (casted != null && action.accept(casted).shouldAbort()) {
++                    break;
++                }
++            }
++            return;
++        }
++        // Pyzh end - Index accessible entities by type
+         for (final Iterator<Entity> iterator = this.entityById.valueIterator(); iterator.hasNext();) {
+             final Entity entity = iterator.next();
+             final Visibility visibility = EntityLookup.getEntityStatus(entity);
+@@ -303,6 +324,7 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+                             EntityLookup.this.entityStartLoaded(entity);
+                             synchronized (this.accessibleEntities) {
+                                 this.accessibleEntities.add(entity);
++                                this.accessibleEntitiesByType.computeIfAbsent(entity.getType(), type -> new EntityList()).add(entity); // Pyzh - Index accessible entities by type
+                             }
+                             if (EntityLookup.this.worldCallback != null) {
+                                 EntityLookup.this.worldCallback.onTrackingStart(entity);
+@@ -328,6 +350,7 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+                             EntityLookup.this.entityEndLoaded(entity);
+                             synchronized (this.accessibleEntities) {
+                                 this.accessibleEntities.remove(entity);
++                                this.accessibleEntitiesByType.get(entity.getType()).remove(entity); // Pyzh - Index accessible entities by type
+                             }
+                             if (EntityLookup.this.worldCallback != null) {
+                                 EntityLookup.this.worldCallback.onTrackingEnd(entity);
