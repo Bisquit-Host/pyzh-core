@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Wed, 23 Sep 2026 21:51:32 +0300
+Subject: [PATCH] Mirror living entity health outside synced data
+
+isAlive() reads health for every living entity several times a tick,
+from activation range checks and plugins calling isValid. The synced
+value sits behind the data holder, its item array, the item and a boxed
+Float. LivingEntity now keeps a float copy that SynchedEntityData updates
+on every write of the health accessor, including client-style
+assignValues. getHealth() falls back to the synced value while the
+Entity constructor runs, before the copy is initialized.
+
+diff --git a/net/minecraft/network/syncher/SynchedEntityData.java b/net/minecraft/network/syncher/SynchedEntityData.java
+index c45b34ddd3d1e9ac8b8f9dbcbefa770618e4c2d8..da7820e97c641dde7e7f1b00c803c3a232cfc073 100644
+--- a/net/minecraft/network/syncher/SynchedEntityData.java
++++ b/net/minecraft/network/syncher/SynchedEntityData.java
+@@ -61,6 +61,7 @@ public class SynchedEntityData {
+         SynchedEntityData.DataItem<T> dataItem = this.getItem(accessor);
+         if (forceDirty || ObjectUtils.notEqual(value, dataItem.getValue())) {
+             dataItem.setValue(value);
++            if (accessor == net.minecraft.world.entity.LivingEntity.DATA_HEALTH_ID && this.entity instanceof net.minecraft.world.entity.LivingEntity living) living.pyzh$mirrorHealth((Float) value); // Pyzh - Mirror living entity health
+             this.entity.onSyncedDataUpdated(accessor);
+             dataItem.setDirty(true);
+             this.isDirty = true;
+@@ -147,6 +148,7 @@ public class SynchedEntityData {
+         }
+ 
+         dataItem.setValue((T)item.value);
++        if (dataItem.accessor == net.minecraft.world.entity.LivingEntity.DATA_HEALTH_ID && this.entity instanceof net.minecraft.world.entity.LivingEntity living) living.pyzh$mirrorHealth((Float) item.value); // Pyzh - Mirror living entity health
+     }
+ 
+     public static class Builder {
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 549bd2811ee8a0b46e1aae4409bc3b9d38ed90b1..9d2ed7d8cf419e4f89d2f3cd57c3d11c3088e75c 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -312,8 +312,23 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     protected boolean shouldBurnInDay = false; public boolean shouldBurnInDay() { return this.shouldBurnInDay; } public void setShouldBurnInDay(boolean shouldBurnInDay) { this.shouldBurnInDay = shouldBurnInDay; } // Purpur - API for any mob to burn daylight
+     // CraftBukkit end
+ 
++    // Pyzh start - Mirror living entity health
++    // isAlive() reads health for every entity several times a tick; the synced value sits four dependent loads away.
++    // SynchedEntityData updates the mirror on every write. It is unset while the Entity constructor runs.
++    private float pyzh$health;
++    private boolean pyzh$healthMirrored;
++
++    public void pyzh$mirrorHealth(final float health) {
++        this.pyzh$health = health;
++    }
++    // Pyzh end - Mirror living entity health
++
+     protected LivingEntity(final EntityType<? extends LivingEntity> type, final Level level) {
+         super(type, level);
++        // Pyzh start - Mirror living entity health
++        this.pyzh$health = this.entityData.get(DATA_HEALTH_ID);
++        this.pyzh$healthMirrored = true;
++        // Pyzh end - Mirror living entity health
+         this.attributes = new AttributeMap(DefaultAttributes.getSupplier(type), this); // Purpur - Ridables
+         this.initAttributes(); // Purpur - Configurable entity base attributes
+         this.craftAttributes = new org.bukkit.craftbukkit.attribute.CraftAttributeMap(this.attributes); // CraftBukkit
+@@ -1443,7 +1458,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+             return (float) player.getBukkitEntity().getHealth();
+         }
+         // CraftBukkit end
+-        return this.entityData.get(DATA_HEALTH_ID);
++        return this.pyzh$healthMirrored ? this.pyzh$health : this.entityData.get(DATA_HEALTH_ID); // Pyzh - Mirror living entity health
+     }
+ 
+     // Paper start - Check for NaN

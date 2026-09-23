@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Wed, 23 Sep 2026 21:51:32 +0300
+Subject: [PATCH] Skip flushing empty inside-block effect steps
+
+Every entity flushes its effect collector each tick, walking every
+effect type and its before and after lists even when nothing was
+recorded. The collector now remembers whether the current step recorded
+anything and skips the walk otherwise. Effect order is unchanged.
+
+diff --git a/net/minecraft/world/entity/InsideBlockEffectApplier.java b/net/minecraft/world/entity/InsideBlockEffectApplier.java
+index 149e2a11534aaffe00b7304898c4f1eb932651c2..cfe2081538b58ec3c97793633ba4070a14d2e056 100644
+--- a/net/minecraft/world/entity/InsideBlockEffectApplier.java
++++ b/net/minecraft/world/entity/InsideBlockEffectApplier.java
+@@ -38,6 +38,7 @@ public interface InsideBlockEffectApplier {
+         private final List<Consumer<Entity>>[] afterEffectsInStep = new List[APPLY_ORDER.length];
+         private final it.unimi.dsi.fastutil.objects.ObjectArrayList<Consumer<Entity>> finalEffects = new it.unimi.dsi.fastutil.objects.ObjectArrayList<>();
+         private int lastStep = -1;
++        private boolean pyzh$stepHasEffects; // Pyzh - Skip flushing empty steps
+ 
+         public StepBasedCollector() {
+             for (int i = 0; i < APPLY_ORDER.length; i++) {
+@@ -71,6 +72,12 @@ public interface InsideBlockEffectApplier {
+         }
+ 
+         private void flushStep() {
++            // Pyzh start - Skip flushing empty steps
++            if (!this.pyzh$stepHasEffects) {
++                return;
++            }
++            this.pyzh$stepHasEffects = false;
++            // Pyzh end - Skip flushing empty steps
+             final int len = APPLY_ORDER.length;
+             final List<Consumer<Entity>>[] beforeArr = this.beforeEffectsInStep;
+             final Consumer<Entity>[] effectArr = this.effectsInStep;
+@@ -104,16 +111,19 @@ public interface InsideBlockEffectApplier {
+         @Override
+         public void apply(final InsideBlockEffectType type) {
+             effectsInStep[type.ordinal()] = recorded(type);
++            this.pyzh$stepHasEffects = true; // Pyzh - Skip flushing empty steps
+         }
+ 
+         @Override
+         public void runBefore(final InsideBlockEffectType type, final Consumer<Entity> effect) {
+             beforeEffectsInStep[type.ordinal()].add(effect);
++            this.pyzh$stepHasEffects = true; // Pyzh - Skip flushing empty steps
+         }
+ 
+         @Override
+         public void runAfter(final InsideBlockEffectType type, final Consumer<Entity> effect) {
+             afterEffectsInStep[type.ordinal()].add(effect);
++            this.pyzh$stepHasEffects = true; // Pyzh - Skip flushing empty steps
+         }
+         // Leaf end - optimize checkInsideBlocks calls
+ 
