@@ -1,0 +1,137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Wed, 23 Sep 2026 21:16:06 +0300
+Subject: [PATCH] Cache advancement progress for player predicates
+
+Tick-triggered advancements that test other advancements resolved each
+one through the advancement manager and the player's progress map, then
+recomputed completion from the requirements, on every check.
+
+AdvancementProgress now caches isDone() against a global change count
+bumped by every criterion grant, revoke and requirements update. Player
+predicates look up progress by the identity of their own Identifier,
+cached per player until the next advancement reload, which is the only
+time a holder's progress object is replaced. Results are unchanged.
+
+diff --git a/net/minecraft/advancements/AdvancementProgress.java b/net/minecraft/advancements/AdvancementProgress.java
+index 7defccef093ddfb239107e6fe8fc9693ed2ed016..e1121f04ffb6b7f3a3e07ec6bc3e1f9e2a749348 100644
+--- a/net/minecraft/advancements/AdvancementProgress.java
++++ b/net/minecraft/advancements/AdvancementProgress.java
+@@ -43,6 +43,11 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
+     );
+     private final Map<String, CriterionProgress> criteria;
+     private AdvancementRequirements requirements = AdvancementRequirements.EMPTY;
++    // Pyzh start - Cache advancement completion
++    // Bumped by every criterion grant/revoke and requirements update, so a cached isDone() is valid while it is unchanged.
++    static final java.util.concurrent.atomic.AtomicLong CHANGES = new java.util.concurrent.atomic.AtomicLong();
++    private volatile long doneAtChange = -1L; // change count << 1 | done
++    // Pyzh end - Cache advancement completion
+ 
+     private AdvancementProgress(final Map<String, CriterionProgress> criteria) {
+         this.criteria = criteria;
+@@ -61,10 +66,20 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
+         }
+ 
+         this.requirements = requirements;
++        CHANGES.incrementAndGet(); // Pyzh - Cache advancement completion
+     }
+ 
+     public boolean isDone() {
+-        return this.requirements.test(this::isCriterionDone);
++        // Pyzh start - Cache advancement completion
++        final long changes = CHANGES.get();
++        final long cached = this.doneAtChange;
++        if (cached >>> 1 == changes) {
++            return (cached & 1L) != 0L;
++        }
++        final boolean done = this.requirements.test(this::isCriterionDone);
++        this.doneAtChange = changes << 1 | (done ? 1L : 0L);
++        return done;
++        // Pyzh end - Cache advancement completion
+     }
+ 
+     public boolean hasProgress() {
+diff --git a/net/minecraft/advancements/CriterionProgress.java b/net/minecraft/advancements/CriterionProgress.java
+index d49e9dc60c3cea402c606a7523b6de6106d7baba..578f6f8bcf8d0a147f3679212ee0aaf94d2aa48c 100644
+--- a/net/minecraft/advancements/CriterionProgress.java
++++ b/net/minecraft/advancements/CriterionProgress.java
+@@ -20,10 +20,12 @@ public class CriterionProgress {
+ 
+     public void grant() {
+         this.obtained = Instant.now();
++        AdvancementProgress.CHANGES.incrementAndGet(); // Pyzh - Cache advancement completion
+     }
+ 
+     public void revoke() {
+         this.obtained = null;
++        AdvancementProgress.CHANGES.incrementAndGet(); // Pyzh - Cache advancement completion
+     }
+ 
+     public @Nullable Instant getObtained() {
+diff --git a/net/minecraft/advancements/predicates/entity/PlayerPredicate.java b/net/minecraft/advancements/predicates/entity/PlayerPredicate.java
+index 670ed3b4d82243da61636a0a6c06b84cc6d990e3..146330284c6fa83f18574d2127b4e6f17342c01a 100644
+--- a/net/minecraft/advancements/predicates/entity/PlayerPredicate.java
++++ b/net/minecraft/advancements/predicates/entity/PlayerPredicate.java
+@@ -18,7 +18,6 @@ import java.util.Map;
+ import java.util.Optional;
+ import java.util.function.Predicate;
+ import java.util.function.Supplier;
+-import net.minecraft.advancements.AdvancementHolder;
+ import net.minecraft.advancements.AdvancementProgress;
+ import net.minecraft.advancements.CriterionProgress;
+ import net.minecraft.advancements.predicates.FoodPredicate;
+@@ -112,8 +111,8 @@ public record PlayerPredicate(
+                 ServerAdvancementManager serverAdvancements = player.level().getServer().getAdvancements();
+ 
+                 for (java.util.Map.Entry<Identifier, PlayerPredicate.AdvancementPredicate> entry : this.advancements.entrySet()) {
+-                    AdvancementHolder advancement = serverAdvancements.get(entry.getKey());
+-                    if (advancement == null || !entry.getValue().test(advancements.getOrStartProgress(advancement))) {
++                    AdvancementProgress progress = advancements.getOrStartProgress(entry.getKey(), serverAdvancements); // Pyzh - Cache player predicate progress
++                    if (progress == null || !entry.getValue().test(progress)) {
+                         return false;
+                     }
+                 }
+diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
+index 98b48a8a6f6372114ee1f71b2c69bff97af4ef64..129a39c82fe6a7b2429b32a4f85dbf42e140b49b 100644
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -61,6 +61,8 @@ public class PlayerAdvancements {
+     private @Nullable AdvancementHolder lastSelectedTab;
+     private boolean isFirstPacket = true;
+     private final Codec<PlayerAdvancements.Data> codec;
++    // Pyzh - Keyed by the Identifier instances held by player predicates. Cleared on reload, the only time a holder's progress is replaced.
++    private final it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<Identifier, AdvancementProgress> progressByPredicateId = new it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<>();
+     private final Map<CriterionTrigger<?>, Map<PlayerAdvancements.TriggerInstanceKey, ? extends CriterionTriggerInstance>> activeTriggers = new it.unimi.dsi.fastutil.objects.Reference2ReferenceOpenHashMap<>(); // Leaf - Replace criterion map with optimized collection
+ 
+     public PlayerAdvancements(
+@@ -86,6 +88,7 @@ public class PlayerAdvancements {
+     public void reload(final ServerAdvancementManager manager) {
+         this.clearTriggers();
+         this.progress.clear();
++        this.progressByPredicateId.clear(); // Pyzh - Cache player predicate progress
+         this.visible.clear();
+         this.rootsToUpdate.clear();
+         this.progressChanged.clear();
+@@ -324,6 +327,22 @@ public class PlayerAdvancements {
+         return progress;
+     }
+ 
++    // Pyzh start - Cache player predicate progress
++    // Same result as getOrStartProgress(manager.get(id)), or null when the advancement does not exist.
++    public @Nullable AdvancementProgress getOrStartProgress(final Identifier id, final ServerAdvancementManager manager) {
++        AdvancementProgress progress = this.progressByPredicateId.get(id);
++        if (progress == null) {
++            final AdvancementHolder advancement = manager.get(id);
++            if (advancement == null) {
++                return null;
++            }
++            progress = this.getOrStartProgress(advancement);
++            this.progressByPredicateId.put(id, progress);
++        }
++        return progress;
++    }
++    // Pyzh end - Cache player predicate progress
++
+     private void startProgress(final AdvancementHolder holder, final AdvancementProgress progress) {
+         progress.update(holder.value().requirements());
+         this.progress.put(holder, progress);
