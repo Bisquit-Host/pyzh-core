@@ -7,39 +7,59 @@ Tick-triggered advancements that test other advancements resolved each
 one through the advancement manager and the player's progress map, then
 recomputed completion from the requirements, on every check.
 
-AdvancementProgress now caches isDone() against a global change count
-bumped by every criterion grant, revoke and requirements update. Player
-predicates look up progress by the identity of their own Identifier,
-cached per player until the next advancement reload, which is the only
-time a holder's progress object is replaced. Results are unchanged.
+AdvancementProgress now caches isDone() against its own change count,
+bumped by every grant and revoke of its criteria (criteria know their
+owning progress) and by requirements updates. The count is per progress
+so that grants to other players, which datapacks issue constantly, do
+not invalidate every cache. Player predicates look up progress by the
+identity of their own Identifier, cached per player until the next
+advancement reload, which is the only time a holder's progress object
+is replaced. Results are unchanged.
 
 diff --git a/net/minecraft/advancements/AdvancementProgress.java b/net/minecraft/advancements/AdvancementProgress.java
-index 7defccef093ddfb239107e6fe8fc9693ed2ed016..e1121f04ffb6b7f3a3e07ec6bc3e1f9e2a749348 100644
+index 7defccef093ddfb239107e6fe8fc9693ed2ed016..2a15f113e45f9d9a62bfcfecbe64865ad3c89ddf 100644
 --- a/net/minecraft/advancements/AdvancementProgress.java
 +++ b/net/minecraft/advancements/AdvancementProgress.java
-@@ -43,6 +43,11 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
+@@ -43,9 +43,16 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
      );
      private final Map<String, CriterionProgress> criteria;
      private AdvancementRequirements requirements = AdvancementRequirements.EMPTY;
 +    // Pyzh start - Cache advancement completion
-+    // Bumped by every criterion grant/revoke and requirements update, so a cached isDone() is valid while it is unchanged.
-+    static final java.util.concurrent.atomic.AtomicLong CHANGES = new java.util.concurrent.atomic.AtomicLong();
++    // Bumped by every grant/revoke of this progress' criteria and by requirements updates, so a cached isDone() is valid
++    // while it is unchanged. Per progress, so other players' grants do not invalidate it.
++    volatile long pyzh$changes;
 +    private volatile long doneAtChange = -1L; // change count << 1 | done
 +    // Pyzh end - Cache advancement completion
  
      private AdvancementProgress(final Map<String, CriterionProgress> criteria) {
          this.criteria = criteria;
-@@ -61,10 +66,20 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
++        this.pyzh$adoptCriteria(); // Pyzh - Cache advancement completion
+     }
+ 
+     public AdvancementProgress() {
+@@ -61,10 +68,32 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
          }
  
          this.requirements = requirements;
-+        CHANGES.incrementAndGet(); // Pyzh - Cache advancement completion
++        // Pyzh start - Cache advancement completion
++        this.pyzh$adoptCriteria();
++        this.pyzh$changes++;
++        // Pyzh end - Cache advancement completion
      }
  
++    // Pyzh start - Cache advancement completion
++    // Criteria report their grants and revokes here, including direct CriterionProgress calls.
++    private void pyzh$adoptCriteria() {
++        for (CriterionProgress progress : this.criteria.values()) {
++            progress.pyzh$owner = this;
++        }
++    }
++    // Pyzh end - Cache advancement completion
++
      public boolean isDone() {
 -        return this.requirements.test(this::isCriterionDone);
 +        // Pyzh start - Cache advancement completion
-+        final long changes = CHANGES.get();
++        final long changes = this.pyzh$changes;
 +        final long cached = this.doneAtChange;
 +        if (cached >>> 1 == changes) {
 +            return (cached & 1L) != 0L;
@@ -52,19 +72,37 @@ index 7defccef093ddfb239107e6fe8fc9693ed2ed016..e1121f04ffb6b7f3a3e07ec6bc3e1f9e
  
      public boolean hasProgress() {
 diff --git a/net/minecraft/advancements/CriterionProgress.java b/net/minecraft/advancements/CriterionProgress.java
-index d49e9dc60c3cea402c606a7523b6de6106d7baba..578f6f8bcf8d0a147f3679212ee0aaf94d2aa48c 100644
+index d49e9dc60c3cea402c606a7523b6de6106d7baba..2764b2b80d9905bd4856aad436a3e6ca0a188cb3 100644
 --- a/net/minecraft/advancements/CriterionProgress.java
 +++ b/net/minecraft/advancements/CriterionProgress.java
-@@ -20,10 +20,12 @@ public class CriterionProgress {
+@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
+ 
+ public class CriterionProgress {
+     private @Nullable Instant obtained;
++    @Nullable AdvancementProgress pyzh$owner; // Pyzh - Cache advancement completion
+ 
+     public CriterionProgress() {
+     }
+@@ -20,10 +21,22 @@ public class CriterionProgress {
  
      public void grant() {
          this.obtained = Instant.now();
-+        AdvancementProgress.CHANGES.incrementAndGet(); // Pyzh - Cache advancement completion
++        // Pyzh start - Cache advancement completion
++        final AdvancementProgress owner = this.pyzh$owner;
++        if (owner != null) {
++            owner.pyzh$changes++;
++        }
++        // Pyzh end - Cache advancement completion
      }
  
      public void revoke() {
          this.obtained = null;
-+        AdvancementProgress.CHANGES.incrementAndGet(); // Pyzh - Cache advancement completion
++        // Pyzh start - Cache advancement completion
++        final AdvancementProgress owner = this.pyzh$owner;
++        if (owner != null) {
++            owner.pyzh$changes++;
++        }
++        // Pyzh end - Cache advancement completion
      }
  
      public @Nullable Instant getObtained() {

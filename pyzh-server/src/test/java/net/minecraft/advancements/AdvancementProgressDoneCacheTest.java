@@ -24,7 +24,7 @@ class AdvancementProgressDoneCacheTest {
         assertTrue(progress.isDone());
 
         other.grantProgress("x");
-        assertTrue(progress.isDone(), "a change elsewhere only forces a recompute");
+        assertTrue(progress.isDone(), "a change to another progress keeps this cache");
 
         progress.revokeProgress("a");
         assertFalse(progress.isDone());

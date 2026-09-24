@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Thu, 24 Sep 2026 16:32:02 +0300
+Subject: [PATCH] Check the raw range before attack and ally checks in
+ TargetingConditions
+
+Nearest-player searches test every player in the level against the
+targeting conditions, and most are out of range, yet canAttack and
+isAlliedTo (team lookups on both sides) ran before the distance check.
+Both are side-effect free, so rejecting by the raw follow range first
+gives the same result.
+
+diff --git a/net/minecraft/world/entity/ai/targeting/TargetingConditions.java b/net/minecraft/world/entity/ai/targeting/TargetingConditions.java
+index a3d270f323d4d5bea09f3e502ad814ffda500c27..e9d4b6d9da4b7f685f6f398f620e6330cb00001d 100644
+--- a/net/minecraft/world/entity/ai/targeting/TargetingConditions.java
++++ b/net/minecraft/world/entity/ai/targeting/TargetingConditions.java
+@@ -78,19 +78,25 @@ public class TargetingConditions {
+                 return false;
+             }
+         } else {
++            // Pyzh start - Check the raw range before attack and ally checks
++            // Nearest-player searches test every player in the level, and most are out of range. canAttack and
++            // isAlliedTo are side-effect free, so rejecting by distance first gives the same result.
++            double distanceToSqr = 0.0;
++            double followRangeRaw = this.range;
++            if (followRangeRaw > 0.0) {
++                distanceToSqr = targeter.distanceToSqr(target.getX(), target.getY(), target.getZ());
++                if (distanceToSqr > followRangeRaw * followRangeRaw) { // Gale - Airplane - the actual follow range will always be this value or smaller
++                    return false;
++                }
++            }
++            // Pyzh end - Check the raw range before attack and ally checks
++
+             if (this.isCombat && (!targeter.canAttack(target) || targeter.isAlliedTo(target))) {
+                 return false;
+             }
+ 
+             if (this.range > 0.0) {
+-                double distanceToSqr = targeter.distanceToSqr(target.getX(), target.getY(), target.getZ());
+                 // Gale start - Airplane - check targeting range before getting visibility
+-                double followRangeRaw = this.range;
+-
+-                if (distanceToSqr > followRangeRaw * followRangeRaw) { // the actual follow range will always be this value or smaller, so if the distance is larger then it never will return true after getting invis
+-                    return false;
+-                }
+-
+                 double modifier = this.testInvisible ? target.getVisibilityPercent(targeter) : 1.0;
+                 double visibilityDistance = Math.max(followRangeRaw * modifier, 2.0);
+                 // Gale end - Airplane - check targeting range before getting visibility
