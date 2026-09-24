@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Thu, 24 Sep 2026 16:05:22 +0300
+Subject: [PATCH] Share player NBT across one trigger's predicate checks
+
+Advancement conditions with an entity nbt predicate serialized the whole
+player (saveWithoutId) for every listening advancement, on every
+inventory change or other trigger. While SimpleCriterionTrigger matches
+listeners the player cannot change, since awards run only after the
+loop, so the tag is now built once per trigger call and reused by each
+nbt predicate on that player. Other callers of getEntityTagToCompare,
+which may modify the tag, still get a fresh copy.
+
+diff --git a/net/minecraft/advancements/predicates/NbtPredicate.java b/net/minecraft/advancements/predicates/NbtPredicate.java
+index fe1fb1e3773e3efe7f228275b8753981db7cfa7a..be241db0cb697b19c433821149a30e2ef24eea9c 100644
+--- a/net/minecraft/advancements/predicates/NbtPredicate.java
++++ b/net/minecraft/advancements/predicates/NbtPredicate.java
+@@ -32,9 +32,23 @@ public record NbtPredicate(CompoundTag tag) {
+     }
+ 
+     public boolean matches(final Entity entity) {
+-        return this.matches(getEntityTagToCompare(entity));
++        return this.matches(pyzh$predicateTag(entity)); // Pyzh - Share the player NBT across one trigger's predicate checks
+     }
+ 
++    // Pyzh start - Share the player NBT across one trigger's predicate checks
++    // Read-only tag for predicates. Inside a trigger's matching loop the player's tag is built once.
++    public static CompoundTag pyzh$predicateTag(final Entity entity) {
++        if (entity instanceof net.minecraft.server.level.ServerPlayer player && player.pyzh$criterionTagScope) {
++            CompoundTag tag = player.pyzh$criterionTag;
++            if (tag == null) {
++                player.pyzh$criterionTag = tag = getEntityTagToCompare(entity);
++            }
++            return tag;
++        }
++        return getEntityTagToCompare(entity);
++    }
++    // Pyzh end - Share the player NBT across one trigger's predicate checks
++
+     public boolean matches(final @Nullable Tag tag) {
+         return tag != null && NbtUtils.compareNbt(this.tag, tag, true);
+     }
+diff --git a/net/minecraft/advancements/predicates/entity/EntityNbtPredicate.java b/net/minecraft/advancements/predicates/entity/EntityNbtPredicate.java
+index c25cbb8a798e244776c012877b9c6625f43104b3..44c077e68376dc0b636fe77d2656505907f3801e 100644
+--- a/net/minecraft/advancements/predicates/entity/EntityNbtPredicate.java
++++ b/net/minecraft/advancements/predicates/entity/EntityNbtPredicate.java
+@@ -12,6 +12,6 @@ public record EntityNbtPredicate(NbtPredicate nbt) implements EntitySubPredicate
+ 
+     @Override
+     public boolean matches(final Entity entity, final ServerLevel level, final @Nullable Vec3 position) {
+-        return this.nbt.matches(NbtPredicate.getEntityTagToCompare(entity));
++        return this.nbt.matches(NbtPredicate.pyzh$predicateTag(entity)); // Pyzh - Share the player NBT across one trigger's predicate checks
+     }
+ }
+diff --git a/net/minecraft/advancements/triggers/SimpleCriterionTrigger.java b/net/minecraft/advancements/triggers/SimpleCriterionTrigger.java
+index 4926a3d0324c217eef1e6b1db01315ea8707cdae..c14f510a3811e0500b4d089368333a57d12bd717 100644
+--- a/net/minecraft/advancements/triggers/SimpleCriterionTrigger.java
++++ b/net/minecraft/advancements/triggers/SimpleCriterionTrigger.java
+@@ -29,6 +29,13 @@ public abstract class SimpleCriterionTrigger<T extends SimpleCriterionTrigger.Si
+             LootContext playerContext = null; // EntityPredicate.createContext(player, player); // Paper - Perf: lazily create LootContext for criterions
+             List<PlayerAdvancements.TriggerInstanceKey> matchedConditions = null;
+ 
++            // Pyzh start - Share the player NBT across one trigger's predicate checks
++            final boolean outerTagScope = player.pyzh$criterionTagScope;
++            final net.minecraft.nbt.CompoundTag outerTag = player.pyzh$criterionTag;
++            player.pyzh$criterionTagScope = true;
++            player.pyzh$criterionTag = null;
++            try {
++            // Pyzh end - Share the player NBT across one trigger's predicate checks
+             for (Entry<PlayerAdvancements.TriggerInstanceKey, T> entry : listenersForType.entrySet()) {
+                 T value = entry.getValue();
+                 if (matcher.test(value)) {
+@@ -42,6 +49,12 @@ public abstract class SimpleCriterionTrigger<T extends SimpleCriterionTrigger.Si
+                     }
+                 }
+             }
++            // Pyzh start - Share the player NBT across one trigger's predicate checks
++            } finally {
++                player.pyzh$criterionTagScope = outerTagScope;
++                player.pyzh$criterionTag = outerTag;
++            }
++            // Pyzh end - Share the player NBT across one trigger's predicate checks
+ 
+             if (matchedConditions != null) {
+                 for (PlayerAdvancements.TriggerInstanceKey criterion : matchedConditions) {
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index 4030776c3d12f8e797720180e141322b5d2cc548..9f3a925e96c996d85865b01dd715418ce506d79a 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -209,6 +209,11 @@ import org.slf4j.Logger;
+ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patches.chunk_system.player.ChunkSystemServerPlayer { // Paper - rewrite chunk system
+     private static final Logger LOGGER = LogUtils.getLogger();
+     public long lastSave = MinecraftServer.currentTick; // Paper - Incremental chunk and player saving
++    // Pyzh start - Share the player NBT across one trigger's predicate checks
++    // Set only while SimpleCriterionTrigger matches listeners; player state cannot change inside that loop.
++    public boolean pyzh$criterionTagScope;
++    public @Nullable CompoundTag pyzh$criterionTag;
++    // Pyzh end - Share the player NBT across one trigger's predicate checks
+     private static final int NEUTRAL_MOB_DEATH_NOTIFICATION_RADII_XZ = 32;
+     private static final int NEUTRAL_MOB_DEATH_NOTIFICATION_RADII_Y = 10;
+     private static final int FLY_STAT_RECORDING_SPEED = 25;

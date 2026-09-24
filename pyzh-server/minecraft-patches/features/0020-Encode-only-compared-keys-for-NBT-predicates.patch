@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Thu, 24 Sep 2026 16:22:59 +0300
+Subject: [PATCH] Encode only compared keys for NBT predicates
+
+Selector nbt options and entity nbt predicates saved the whole entity,
+players included with inventory and ender chest, only to compare a few
+top-level keys. NbtUtils.compareNbt only reads the expected tag's
+top-level keys, so the save now goes through a view that encodes just
+those keys. Every save method still runs; skipped keys are tracked so
+isEmpty and discard behave as before. Trigger matching keeps its shared
+full player tag.
+
+diff --git a/net/minecraft/advancements/predicates/NbtPredicate.java b/net/minecraft/advancements/predicates/NbtPredicate.java
+index be241db0cb697b19c433821149a30e2ef24eea9c..4ef862db4e521599fb06b1dc4305b7d4ce3839a0 100644
+--- a/net/minecraft/advancements/predicates/NbtPredicate.java
++++ b/net/minecraft/advancements/predicates/NbtPredicate.java
+@@ -32,12 +32,13 @@ public record NbtPredicate(CompoundTag tag) {
+     }
+ 
+     public boolean matches(final Entity entity) {
+-        return this.matches(pyzh$predicateTag(entity)); // Pyzh - Share the player NBT across one trigger's predicate checks
++        return this.matches(this.pyzh$predicateTag(entity)); // Pyzh - Share the player NBT across one trigger's predicate checks
+     }
+ 
+     // Pyzh start - Share the player NBT across one trigger's predicate checks
+-    // Read-only tag for predicates. Inside a trigger's matching loop the player's tag is built once.
+-    public static CompoundTag pyzh$predicateTag(final Entity entity) {
++    // Read-only tag for this predicate. Inside a trigger's matching loop the player's full tag is built once;
++    // otherwise only the keys this predicate compares are encoded.
++    public CompoundTag pyzh$predicateTag(final Entity entity) {
+         if (entity instanceof net.minecraft.server.level.ServerPlayer player && player.pyzh$criterionTagScope) {
+             CompoundTag tag = player.pyzh$criterionTag;
+             if (tag == null) {
+@@ -45,7 +46,7 @@ public record NbtPredicate(CompoundTag tag) {
+             }
+             return tag;
+         }
+-        return getEntityTagToCompare(entity);
++        return pyzh$getEntityTagToCompare(entity, this.tag.keySet()); // Pyzh - Encode only compared keys for NBT predicates
+     }
+     // Pyzh end - Share the player NBT across one trigger's predicate checks
+ 
+@@ -54,17 +55,25 @@ public record NbtPredicate(CompoundTag tag) {
+     }
+ 
+     public static CompoundTag getEntityTagToCompare(final Entity entity) {
++        return pyzh$getEntityTagToCompare(entity, null); // Pyzh - Encode only compared keys for NBT predicates
++    }
++
++    // Pyzh start - Encode only compared keys for NBT predicates
++    // With onlyKeys set, the tag holds just those top-level keys; only use it for NbtUtils.compareNbt against a tag with the same keys.
++    public static CompoundTag pyzh$getEntityTagToCompare(final Entity entity, final java.util.@Nullable Set<String> onlyKeys) {
+         try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(entity.problemPath(), LOGGER)) {
+             TagValueOutput output = TagValueOutput.createWithContext(reporter, entity.registryAccess());
+-            entity.saveWithoutId(output);
++            final net.minecraft.world.level.storage.ValueOutput target = onlyKeys == null ? output : output.pyzh$onlyKeys(onlyKeys);
++            entity.saveWithoutId(target);
+             if (entity instanceof Player player) {
+                 ItemStack selected = player.getInventory().getSelectedItem();
+                 if (!selected.isEmpty()) {
+-                    output.store("SelectedItem", ItemStack.CODEC, selected);
++                    target.store("SelectedItem", ItemStack.CODEC, selected);
+                 }
+             }
+ 
+             return output.buildResult();
+         }
+     }
++    // Pyzh end - Encode only compared keys for NBT predicates
+ }
+diff --git a/net/minecraft/advancements/predicates/entity/EntityNbtPredicate.java b/net/minecraft/advancements/predicates/entity/EntityNbtPredicate.java
+index 44c077e68376dc0b636fe77d2656505907f3801e..91b469d0a943757fa93156d7d2d31d33a6ac224c 100644
+--- a/net/minecraft/advancements/predicates/entity/EntityNbtPredicate.java
++++ b/net/minecraft/advancements/predicates/entity/EntityNbtPredicate.java
+@@ -12,6 +12,6 @@ public record EntityNbtPredicate(NbtPredicate nbt) implements EntitySubPredicate
+ 
+     @Override
+     public boolean matches(final Entity entity, final ServerLevel level, final @Nullable Vec3 position) {
+-        return this.nbt.matches(NbtPredicate.pyzh$predicateTag(entity)); // Pyzh - Share the player NBT across one trigger's predicate checks
++        return this.nbt.matches(this.nbt.pyzh$predicateTag(entity)); // Pyzh - Share the player NBT across one trigger's predicate checks
+     }
+ }
+diff --git a/net/minecraft/commands/arguments/selector/options/EntitySelectorOptions.java b/net/minecraft/commands/arguments/selector/options/EntitySelectorOptions.java
+index f4ca9a19d2f223311accd96e9215cba263d3d405..aac457453e3a081083e95947c7a40efbdf0160fa 100644
+--- a/net/minecraft/commands/arguments/selector/options/EntitySelectorOptions.java
++++ b/net/minecraft/commands/arguments/selector/options/EntitySelectorOptions.java
+@@ -329,11 +329,12 @@ public class EntitySelectorOptions {
+                 parser.addPredicate(e -> {
+                     try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(e.problemPath(), LOGGER)) {
+                         TagValueOutput output = TagValueOutput.createWithContext(reporter, e.registryAccess());
+-                        e.saveWithoutId(output);
++                        final net.minecraft.world.level.storage.ValueOutput target = output.pyzh$onlyKeys(tag.keySet()); // Pyzh - Encode only compared keys for NBT predicates
++                        e.saveWithoutId(target);
+                         if (e instanceof ServerPlayer player) {
+                             ItemStack selected = player.getInventory().getSelectedItem();
+                             if (!selected.isEmpty()) {
+-                                output.store("SelectedItem", ItemStack.CODEC, selected);
++                                target.store("SelectedItem", ItemStack.CODEC, selected); // Pyzh - Encode only compared keys for NBT predicates
+                             }
+                         }
+ 
+diff --git a/net/minecraft/world/level/storage/TagValueOutput.java b/net/minecraft/world/level/storage/TagValueOutput.java
+index 007bd7addfe854f28fcf53cb638f51b7601b1c92..9bd854a6ffc9c57a8a2435be5e685690d3d7adeb 100644
+--- a/net/minecraft/world/level/storage/TagValueOutput.java
++++ b/net/minecraft/world/level/storage/TagValueOutput.java
+@@ -170,6 +170,135 @@ public class TagValueOutput implements ValueOutput {
+         return this.output;
+     }
+ 
++    // Pyzh start - Encode only compared keys for NBT predicates
++    // A view that writes only top-level keys in onlyKeys into this output and skips encoding everything else.
++    // Used where the result is only read by NbtUtils.compareNbt, which looks up the expected tag's top-level keys.
++    // isEmpty() and discard() still account for skipped keys; nested outputs of skipped keys are real but detached.
++    public ValueOutput pyzh$onlyKeys(final java.util.Set<String> onlyKeys) {
++        return new KeyFiltered(this, onlyKeys);
++    }
++
++    private static final class KeyFiltered implements ValueOutput {
++        private final TagValueOutput delegate;
++        private final java.util.Set<String> onlyKeys;
++        private final java.util.Set<String> skippedKeys = new java.util.HashSet<>();
++
++        private KeyFiltered(final TagValueOutput delegate, final java.util.Set<String> onlyKeys) {
++            this.delegate = delegate;
++            this.onlyKeys = onlyKeys;
++        }
++
++        private boolean skip(final String name) {
++            if (this.onlyKeys.contains(name)) {
++                return false;
++            }
++            this.skippedKeys.add(name);
++            return true;
++        }
++
++        @Override
++        public <T> void store(final String name, final Codec<T> codec, final T value) {
++            if (!this.skip(name)) this.delegate.store(name, codec, value);
++        }
++
++        @Override
++        public <T> void storeNullable(final String name, final Codec<T> codec, final @Nullable T value) {
++            if (value != null) this.store(name, codec, value);
++        }
++
++        @Override
++        public <T> void store(final MapCodec<T> codec, final T value) {
++            this.delegate.store(codec, value);
++        }
++
++        @Override
++        public void putBoolean(final String name, final boolean value) {
++            if (!this.skip(name)) this.delegate.putBoolean(name, value);
++        }
++
++        @Override
++        public void putByte(final String name, final byte value) {
++            if (!this.skip(name)) this.delegate.putByte(name, value);
++        }
++
++        @Override
++        public void putShort(final String name, final short value) {
++            if (!this.skip(name)) this.delegate.putShort(name, value);
++        }
++
++        @Override
++        public void putInt(final String name, final int value) {
++            if (!this.skip(name)) this.delegate.putInt(name, value);
++        }
++
++        @Override
++        public void putLong(final String name, final long value) {
++            if (!this.skip(name)) this.delegate.putLong(name, value);
++        }
++
++        @Override
++        public void putFloat(final String name, final float value) {
++            if (!this.skip(name)) this.delegate.putFloat(name, value);
++        }
++
++        @Override
++        public void putDouble(final String name, final double value) {
++            if (!this.skip(name)) this.delegate.putDouble(name, value);
++        }
++
++        @Override
++        public void putString(final String name, final String value) {
++            if (!this.skip(name)) this.delegate.putString(name, value);
++        }
++
++        @Override
++        public void putIntArray(final String name, final int[] value) {
++            if (!this.skip(name)) this.delegate.putIntArray(name, value);
++        }
++
++        @Override
++        public ValueOutput child(final String name) {
++            if (!this.skip(name)) return this.delegate.child(name);
++            return new TagValueOutput(this.delegate.reporterForChild(name), this.delegate.ops, new CompoundTag());
++        }
++
++        @Override
++        public ValueOutput.ValueOutputList childrenList(final String name) {
++            if (!this.skip(name)) return this.delegate.childrenList(name);
++            return new TagValueOutput.ListWrapper(name, this.delegate.problemReporter, this.delegate.ops, new ListTag());
++        }
++
++        @Override
++        public <T> ValueOutput.TypedOutputList<T> list(final String name, final Codec<T> codec) {
++            if (!this.skip(name)) return this.delegate.list(name, codec);
++            return new ValueOutput.TypedOutputList<>() {
++                private boolean empty = true;
++
++                @Override
++                public void add(final T value) {
++                    this.empty = false;
++                }
++
++                @Override
++                public boolean isEmpty() {
++                    return this.empty;
++                }
++            };
++        }
++
++        @Override
++        public void discard(final String name) {
++            this.skippedKeys.remove(name);
++            this.delegate.discard(name);
++        }
++
++        @Override
++        public boolean isEmpty() {
++            return this.delegate.isEmpty() && this.skippedKeys.isEmpty();
++        }
++    }
++    // Pyzh end - Encode only compared keys for NBT predicates
++
+     public record EncodeToFieldFailedProblem(String name, Object value, Error<?> error) implements ProblemReporter.Problem {
+         @Override
+         public String description() {

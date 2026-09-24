@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Thu, 24 Sep 2026 16:22:59 +0300
+Subject: [PATCH] Collect chunk Bukkit entities without intermediate lists
+
+getChunkEntities copied the chunk's entity list, collected valid Bukkit
+entities into a second list and copied that into the array. It now
+fills the array straight from the entity list. getBukkitEntity and
+isValid do not change the list, and the empty result is still the
+shared empty array.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
+index 498f397b53b7b21f5c95cb0550381cd469cba9b1..9f1c345ddb428f71e94cf8da195b98dea7fa656f 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
+@@ -199,6 +199,27 @@ public final class ChunkEntitySlices {
+         return this.entities.size() != 0;
+     }
+ 
++    // Pyzh start - Collect chunk Bukkit entities without intermediate lists
++    public org.bukkit.entity.Entity[] pyzh$getValidBukkitEntities() {
++        final int len = this.entities.size();
++        if (len == 0) {
++            return me.titaniumtown.ArrayConstants.emptyBukkitEntityArray;
++        }
++
++        final Entity[] rawData = this.entities.getRawData();
++        final org.bukkit.entity.Entity[] ret = new org.bukkit.entity.Entity[len];
++        int count = 0;
++        for (int i = 0; i < len; ++i) {
++            final org.bukkit.entity.Entity bukkit = rawData[i].getBukkitEntity();
++            if (bukkit != null && bukkit.isValid()) {
++                ret[count++] = bukkit;
++            }
++        }
++
++        return count == len ? ret : count == 0 ? me.titaniumtown.ArrayConstants.emptyBukkitEntityArray : java.util.Arrays.copyOf(ret, count);
++    }
++    // Pyzh end - Collect chunk Bukkit entities without intermediate lists
++
+     public List<Entity> getAllEntities() {
+         final int len = this.entities.size();
+         if (len == 0) {
+diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
+index dcc783fe5aa1b4790db5873e22b32ea4517d68df..8c7f4af6a570459277c01cea9f46eca9653b920b 100644
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -1988,15 +1988,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+             return me.titaniumtown.ArrayConstants.emptyBukkitEntityArray; // Gale - JettPack - reduce array allocations
+         }
+ 
+-        List<org.bukkit.entity.Entity> ret = new java.util.ArrayList<>();
+-        for (Entity entity : slices.getAllEntities()) {
+-            org.bukkit.entity.Entity bukkit = entity.getBukkitEntity();
+-            if (bukkit != null && bukkit.isValid()) {
+-                ret.add(bukkit);
+-            }
+-        }
+-
+-        return ret.toArray(me.titaniumtown.ArrayConstants.emptyBukkitEntityArray); // Gale - JettPack - reduce array allocations
++        return slices.pyzh$getValidBukkitEntities(); // Pyzh - Collect chunk Bukkit entities without intermediate lists
+     }
+     // Paper end - rewrite chunk system
+ 

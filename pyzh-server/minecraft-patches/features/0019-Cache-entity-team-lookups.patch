@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Thu, 24 Sep 2026 16:22:59 +0300
+Subject: [PATCH] Cache entity team lookups
+
+Entity.getTeam hashed the scoreboard name into the team map for every
+push, ally and visibility check. Scoreboard now counts writes to its
+player-to-team map (the three methods that change it), and entities
+keep their last lookup as one immutable snapshot of scoreboard, count,
+name instance and team, reused while all three match.
+
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index 0ac10f8283ebf0f897a9df1c6ec0e4bd7a2f732b..0418b394ed94ecfd7f940c8e8cfa0c2ab0bdd740 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -3968,9 +3968,25 @@ public abstract class Entity
+     public void updateDynamicGameEventListener(final BiConsumer<DynamicGameEventListener<?>, ServerLevel> action) {
+     }
+ 
++    // Pyzh start - Cache entity team lookups
++    // Valid while the scoreboard, its membership change count and the scoreboard name instance are unchanged.
++    // One immutable snapshot, so a racing reader never mixes fields from two lookups.
++    private record PyzhTeamLookup(net.minecraft.world.scores.Scoreboard board, long changes, String name, @Nullable PlayerTeam team) {}
++    private @Nullable PyzhTeamLookup pyzh$teamLookup;
++    // Pyzh end - Cache entity team lookups
++
+     public @Nullable PlayerTeam getTeam() {
+         if (!this.level().paperConfig().scoreboards.allowNonPlayerEntitiesOnScoreboards && !(this instanceof Player)) { return null; } // Paper - Perf: Disable Scoreboards for non players by default
+-        return this.level().getScoreboard().getPlayersTeam(this.getScoreboardName());
++        // Pyzh start - Cache entity team lookups
++        final net.minecraft.world.scores.Scoreboard board = this.level().getScoreboard();
++        final String name = this.getScoreboardName();
++        final long changes = board.pyzh$teamMembershipChanges;
++        PyzhTeamLookup lookup = this.pyzh$teamLookup;
++        if (lookup == null || lookup.board() != board || lookup.changes() != changes || lookup.name() != name) {
++            this.pyzh$teamLookup = lookup = new PyzhTeamLookup(board, changes, name, board.getPlayersTeam(name));
++        }
++        return lookup.team();
++        // Pyzh end - Cache entity team lookups
+     }
+ 
+     public final boolean isAlliedTo(final @Nullable Entity other) {
+diff --git a/net/minecraft/world/scores/Scoreboard.java b/net/minecraft/world/scores/Scoreboard.java
+index 4a15851bda30c918c58c96d2cb98b74f30db396c..921514c0041c3ffb7bc9caa4f3b0f15ab9a5378c 100644
+--- a/net/minecraft/world/scores/Scoreboard.java
++++ b/net/minecraft/world/scores/Scoreboard.java
+@@ -36,6 +36,7 @@ public class Scoreboard {
+     private final Map<DisplaySlot, Objective> displayObjectives = new EnumMap<>(DisplaySlot.class);
+     private final Object2ObjectMap<String, PlayerTeam> teamsByName = new Object2ObjectOpenHashMap<>();
+     private final Object2ObjectMap<String, PlayerTeam> teamsByPlayer = new Object2ObjectOpenHashMap<>();
++    public long pyzh$teamMembershipChanges; // Pyzh - Cache entity team lookups; bumped on every teamsByPlayer write
+ 
+     public @Nullable Objective getObjective(final @Nullable String name) {
+         return this.objectivesByName.get(name);
+@@ -265,6 +266,7 @@ public class Scoreboard {
+         for (String player : team.getPlayers()) {
+             this.teamsByPlayer.remove(player);
+         }
++        this.pyzh$teamMembershipChanges++; // Pyzh - Cache entity team lookups
+ 
+         this.onTeamRemoved(team);
+     }
+@@ -275,6 +277,7 @@ public class Scoreboard {
+         }
+ 
+         this.teamsByPlayer.put(player, team);
++        this.pyzh$teamMembershipChanges++; // Pyzh - Cache entity team lookups
+         return team.getPlayers().add(player);
+     }
+ 
+@@ -294,6 +297,7 @@ public class Scoreboard {
+         }
+ 
+         this.teamsByPlayer.remove(player);
++        this.pyzh$teamMembershipChanges++; // Pyzh - Cache entity team lookups
+         team.getPlayers().remove(player);
+     }
+ 

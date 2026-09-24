@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Thu, 24 Sep 2026 16:22:59 +0300
+Subject: [PATCH] Answer isChunkLoaded from the full chunk map
+
+isChunkLoaded looked up the chunk holder and then its FULL chunk, several
+dependent loads per call. Plugins sweeping loaded chunks call it for
+every chunk. The full chunk map is updated in the same step as the
+holder's FULL status (onChunkPreBorder right after the status becomes
+FULL, onChunkPostNotBorder right before it drops), with no plugin code
+in between, so its lookup gives the same answer.
+
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+index 3e593b17ead582b9d0c36c6fad51a0e0b10f0ed9..a6dddcd0d9f2c8eb9b90f9dc2f7e54ec0cf7d7a4 100644
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -249,11 +249,8 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+ 
+     // CraftBukkit start - properly implement isChunkLoaded
+     public boolean isChunkLoaded(int chunkX, int chunkZ) {
+-        ChunkHolder chunk = this.chunkMap.getUpdatingChunkIfPresent(ChunkPos.pack(chunkX, chunkZ));
+-        if (chunk == null) {
+-            return false;
+-        }
+-        return chunk.getFullChunkNow() != null;
++        // Pyzh - The full chunk map changes together with the holder's FULL status, with no plugin code in between
++        return this.getChunkAtIfLoadedImmediately(chunkX, chunkZ) != null;
+     }
+     // CraftBukkit end
+     // Paper start
