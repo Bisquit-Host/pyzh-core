@@ -30,6 +30,7 @@ public class AsyncPlayerDataSavingTest {
         final CountDownLatch failedPlayerRelease = new CountDownLatch(1);
         final CountDownLatch shutdownPlayerRelease = new CountDownLatch(1);
         final CountDownLatch shutdownLevelRelease = new CountDownLatch(1);
+        final CountDownLatch jsonRelease = new CountDownLatch(1);
         Thread shutdownThread = null;
 
         try {
@@ -98,6 +99,33 @@ public class AsyncPlayerDataSavingTest {
             AsyncPlayerDataSaving.submitLevel(() -> levelThread.set(Thread.currentThread().getName())).get(5L, TimeUnit.SECONDS);
             Assertions.assertEquals("Leaf Level IO Thread", levelThread.get());
 
+            final java.nio.file.Path statsFile = java.nio.file.Path.of("stats", "json-order-test.json");
+            final CountDownLatch jsonStarted = new CountDownLatch(1);
+            final List<Integer> jsonWrites = new CopyOnWriteArrayList<>();
+            final CompletableFuture<Void> firstJson = AsyncPlayerDataSaving.submitJson(statsFile, jsonValue(1), json -> {
+                jsonStarted.countDown();
+                await(jsonRelease);
+                jsonWrites.add(json.getAsJsonObject().get("v").getAsInt());
+            });
+            Assertions.assertTrue(jsonStarted.await(5L, TimeUnit.SECONDS));
+            final CompletableFuture<Void> secondJson = AsyncPlayerDataSaving.submitJson(statsFile.toAbsolutePath(), jsonValue(2), json -> jsonWrites.add(json.getAsJsonObject().get("v").getAsInt()));
+            final com.google.gson.JsonElement pendingJson = AsyncPlayerDataSaving.getPendingJson(statsFile).orElseThrow();
+            Assertions.assertEquals(2, pendingJson.getAsJsonObject().get("v").getAsInt());
+            pendingJson.getAsJsonObject().addProperty("v", 88);
+            Assertions.assertEquals(2, AsyncPlayerDataSaving.getPendingJson(statsFile).orElseThrow().getAsJsonObject().get("v").getAsInt());
+            jsonRelease.countDown();
+            firstJson.get(5L, TimeUnit.SECONDS);
+            secondJson.get(5L, TimeUnit.SECONDS);
+            Assertions.assertEquals(List.of(1, 2), jsonWrites);
+            Assertions.assertTrue(AsyncPlayerDataSaving.getPendingJson(statsFile).isEmpty());
+
+            AsyncPlayerDataSave.enabled = false;
+            final AtomicBoolean syncJsonWritten = new AtomicBoolean();
+            AsyncPlayerDataSaving.submitJson(statsFile, jsonValue(3), json -> syncJsonWritten.set(true));
+            Assertions.assertTrue(syncJsonWritten.get(), "disabled async saving writes before returning");
+            Assertions.assertTrue(AsyncPlayerDataSaving.getPendingJson(statsFile).isEmpty());
+            AsyncPlayerDataSave.enabled = true;
+
             final CountDownLatch shutdownPlayerStarted = new CountDownLatch(1);
             final CountDownLatch shutdownLevelStarted = new CountDownLatch(1);
             final AtomicBoolean shutdownPlayerCompleted = new AtomicBoolean();
@@ -165,6 +193,7 @@ public class AsyncPlayerDataSavingTest {
             failedPlayerRelease.countDown();
             shutdownPlayerRelease.countDown();
             shutdownLevelRelease.countDown();
+            jsonRelease.countDown();
             if (shutdownThread == null || shutdownThread.isAlive()) {
                 AsyncPlayerDataSaving.shutdownAndAwait();
             }
@@ -187,6 +216,12 @@ public class AsyncPlayerDataSavingTest {
      * failure. A healthy run releases these latches in milliseconds; this bound is never reached.
      */
     private static final Duration LATCH_TIMEOUT = REJECTION_TIMEOUT.plusSeconds(30L);
+
+    private static com.google.gson.JsonElement jsonValue(final int value) {
+        final com.google.gson.JsonObject json = new com.google.gson.JsonObject();
+        json.addProperty("v", value);
+        return json;
+    }
 
     private static void await(final CountDownLatch latch) {
         try {

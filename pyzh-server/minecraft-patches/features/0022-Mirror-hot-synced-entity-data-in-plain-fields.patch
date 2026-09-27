@@ -1,0 +1,309 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 27 Sep 2026 11:35:04 +0300
+Subject: [PATCH] Mirror hot synced entity data in plain fields
+
+Entity flags, air, freeze ticks, no-gravity and pose, mob flags (NoAI,
+left-handed, aggressive), the sleeping position and the dropped item
+stack were read from SynchedEntityData every tick: holder, item array,
+data item and boxed value, four dependent loads each. Entities now keep
+plain copies, filled right after the synced data is built and updated by
+SynchedEntityData on every value write through a SyncedDataHolder hook
+that passes the item's own accessor, so look-alike accessors with the
+same id stay covered. The health mirror moves onto the same hook and
+drops its initialisation flag.
+
+diff --git a/net/minecraft/network/syncher/SyncedDataHolder.java b/net/minecraft/network/syncher/SyncedDataHolder.java
+index 93c2e47e4860a27156ddf1434bd9c1e5a6eba744..7467ad66cc182cce3aaa6dec1ae963a1b338231f 100644
+--- a/net/minecraft/network/syncher/SyncedDataHolder.java
++++ b/net/minecraft/network/syncher/SyncedDataHolder.java
+@@ -6,4 +6,8 @@ public interface SyncedDataHolder {
+     void onSyncedDataUpdated(EntityDataAccessor<?> accessor);
+ 
+     void onSyncedDataUpdated(List<SynchedEntityData.DataValue<?>> updatedItems);
++
++    // Pyzh - Mirror hot synced entity data; called after every value write with the item's own accessor
++    default void pyzh$onSyncedValueWritten(final EntityDataAccessor<?> accessor, final Object value) {
++    }
+ }
+diff --git a/net/minecraft/network/syncher/SynchedEntityData.java b/net/minecraft/network/syncher/SynchedEntityData.java
+index da7820e97c641dde7e7f1b00c803c3a232cfc073..01abf2b727fd6821a615a24bc6f8fbf24efbe59d 100644
+--- a/net/minecraft/network/syncher/SynchedEntityData.java
++++ b/net/minecraft/network/syncher/SynchedEntityData.java
+@@ -61,7 +61,7 @@ public class SynchedEntityData {
+         SynchedEntityData.DataItem<T> dataItem = this.getItem(accessor);
+         if (forceDirty || ObjectUtils.notEqual(value, dataItem.getValue())) {
+             dataItem.setValue(value);
+-            if (accessor == net.minecraft.world.entity.LivingEntity.DATA_HEALTH_ID && this.entity instanceof net.minecraft.world.entity.LivingEntity living) living.pyzh$mirrorHealth((Float) value); // Pyzh - Mirror living entity health
++            this.entity.pyzh$onSyncedValueWritten(dataItem.accessor, value); // Pyzh - Mirror hot synced entity data
+             this.entity.onSyncedDataUpdated(accessor);
+             dataItem.setDirty(true);
+             this.isDirty = true;
+@@ -148,7 +148,7 @@ public class SynchedEntityData {
+         }
+ 
+         dataItem.setValue((T)item.value);
+-        if (dataItem.accessor == net.minecraft.world.entity.LivingEntity.DATA_HEALTH_ID && this.entity instanceof net.minecraft.world.entity.LivingEntity living) living.pyzh$mirrorHealth((Float) item.value); // Pyzh - Mirror living entity health
++        this.entity.pyzh$onSyncedValueWritten(dataItem.accessor, item.value); // Pyzh - Mirror hot synced entity data
+     }
+ 
+     public static class Builder {
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index 0418b394ed94ecfd7f940c8e8cfa0c2ab0bdd740..0cc656758088300cabb2e9636309f7731832b631 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -628,6 +628,7 @@ public abstract class Entity
+         entityDataBuilder.define(DATA_TICKS_FROZEN, 0);
+         this.defineSynchedData(entityDataBuilder);
+         this.entityData = entityDataBuilder.build();
++        this.pyzh$loadSyncedMirrors(); // Pyzh - Mirror hot synced entity data
+         this.setPos(0.0, 0.0, 0.0);
+         this.eyeHeight = this.dimensions.eyeHeight();
+         this.despawnTime = level == null || type == EntityTypes.PLAYER ? -1 : level.paperConfig().entities.spawning.despawnTime.getOrDefault(type, io.papermc.paper.configuration.type.number.IntOr.Disabled.DISABLED).or(-1); // Paper - entity despawn time limit
+@@ -821,7 +822,7 @@ public abstract class Entity
+     }
+ 
+     public Pose getPose() {
+-        return this.entityData.get(DATA_POSE);
++        return this.pyzh$pose; // Pyzh - Mirror hot synced entity data
+     }
+ 
+     public boolean hasPose(final Pose pose) {
+@@ -2196,7 +2197,7 @@ public abstract class Entity
+     }
+ 
+     public boolean isNoGravity() {
+-        return this.entityData.get(DATA_NO_GRAVITY);
++        return this.pyzh$noGravity; // Pyzh - Mirror hot synced entity data
+     }
+ 
+     public void setNoGravity(final boolean noGravity) {
+@@ -4010,11 +4011,11 @@ public abstract class Entity
+     }
+ 
+     public boolean getSharedFlag(final @Entity.Flags int flag) {
+-        return (this.entityData.get(DATA_SHARED_FLAGS_ID) & 1 << flag) != 0;
++        return (this.pyzh$sharedFlags & 1 << flag) != 0; // Pyzh - Mirror hot synced entity data
+     }
+ 
+     public void setSharedFlag(final @Entity.Flags int flag, final boolean value) {
+-        byte currentValue = this.entityData.get(DATA_SHARED_FLAGS_ID);
++        byte currentValue = this.pyzh$sharedFlags; // Pyzh - Mirror hot synced entity data
+         if (value) {
+             this.entityData.set(DATA_SHARED_FLAGS_ID, (byte)(currentValue | 1 << flag));
+         } else {
+@@ -4027,7 +4028,7 @@ public abstract class Entity
+     }
+ 
+     public int getAirSupply() {
+-        return this.entityData.get(DATA_AIR_SUPPLY_ID);
++        return this.pyzh$airSupply; // Pyzh - Mirror hot synced entity data
+     }
+ 
+     public void setAirSupply(final int supply) {
+@@ -4053,9 +4054,43 @@ public abstract class Entity
+     }
+ 
+     public int getTicksFrozen() {
+-        return this.entityData.get(DATA_TICKS_FROZEN);
++        return this.pyzh$ticksFrozen; // Pyzh - Mirror hot synced entity data
+     }
+ 
++    // Pyzh start - Mirror hot synced entity data
++    // Plain copies of synced values read every tick, where each synced read is several dependent loads.
++    // Filled once the data is built, then kept equal by SynchedEntityData, which reports every value write.
++    // Subclasses mirror their own accessors and must call super for the rest; their mirror fields must have no initializer.
++    private byte pyzh$sharedFlags;
++    private int pyzh$airSupply;
++    private int pyzh$ticksFrozen;
++    private boolean pyzh$noGravity;
++    private Pose pyzh$pose;
++
++    protected void pyzh$loadSyncedMirrors() {
++        this.pyzh$sharedFlags = this.entityData.get(DATA_SHARED_FLAGS_ID);
++        this.pyzh$airSupply = this.entityData.get(DATA_AIR_SUPPLY_ID);
++        this.pyzh$ticksFrozen = this.entityData.get(DATA_TICKS_FROZEN);
++        this.pyzh$noGravity = this.entityData.get(DATA_NO_GRAVITY);
++        this.pyzh$pose = this.entityData.get(DATA_POSE);
++    }
++
++    @Override
++    public void pyzh$onSyncedValueWritten(final EntityDataAccessor<?> accessor, final Object value) {
++        if (accessor == DATA_SHARED_FLAGS_ID) {
++            this.pyzh$sharedFlags = (Byte) value;
++        } else if (accessor == DATA_AIR_SUPPLY_ID) {
++            this.pyzh$airSupply = (Integer) value;
++        } else if (accessor == DATA_TICKS_FROZEN) {
++            this.pyzh$ticksFrozen = (Integer) value;
++        } else if (accessor == DATA_NO_GRAVITY) {
++            this.pyzh$noGravity = (Boolean) value;
++        } else if (accessor == DATA_POSE) {
++            this.pyzh$pose = (Pose) value;
++        }
++    }
++    // Pyzh end - Mirror hot synced entity data
++
+     public void setTicksFrozen(final int ticks) {
+         this.entityData.set(DATA_TICKS_FROZEN, ticks);
+     }
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 9d2ed7d8cf419e4f89d2f3cd57c3d11c3088e75c..97ddbe649d849441d8e10694ab35b579ac716979 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -312,23 +312,33 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     protected boolean shouldBurnInDay = false; public boolean shouldBurnInDay() { return this.shouldBurnInDay; } public void setShouldBurnInDay(boolean shouldBurnInDay) { this.shouldBurnInDay = shouldBurnInDay; } // Purpur - API for any mob to burn daylight
+     // CraftBukkit end
+ 
+-    // Pyzh start - Mirror living entity health
+-    // isAlive() reads health for every entity several times a tick; the synced value sits four dependent loads away.
+-    // SynchedEntityData updates the mirror on every write. It is unset while the Entity constructor runs.
++    // Pyzh start - Mirror hot synced entity data
++    // isAlive() and isSleeping() run for every entity several times a tick. See Entity#pyzh$loadSyncedMirrors.
+     private float pyzh$health;
+-    private boolean pyzh$healthMirrored;
++    private Optional<BlockPos> pyzh$sleepingPos;
+ 
+-    public void pyzh$mirrorHealth(final float health) {
+-        this.pyzh$health = health;
++    @Override
++    protected void pyzh$loadSyncedMirrors() {
++        super.pyzh$loadSyncedMirrors();
++        this.pyzh$health = this.entityData.get(DATA_HEALTH_ID);
++        this.pyzh$sleepingPos = this.entityData.get(SLEEPING_POS_ID);
++    }
++
++    @Override
++    @SuppressWarnings("unchecked")
++    public void pyzh$onSyncedValueWritten(final EntityDataAccessor<?> accessor, final Object value) {
++        if (accessor == DATA_HEALTH_ID) {
++            this.pyzh$health = (Float) value;
++        } else if (accessor == SLEEPING_POS_ID) {
++            this.pyzh$sleepingPos = (Optional<BlockPos>) value;
++        } else {
++            super.pyzh$onSyncedValueWritten(accessor, value);
++        }
+     }
+-    // Pyzh end - Mirror living entity health
++    // Pyzh end - Mirror hot synced entity data
+ 
+     protected LivingEntity(final EntityType<? extends LivingEntity> type, final Level level) {
+         super(type, level);
+-        // Pyzh start - Mirror living entity health
+-        this.pyzh$health = this.entityData.get(DATA_HEALTH_ID);
+-        this.pyzh$healthMirrored = true;
+-        // Pyzh end - Mirror living entity health
+         this.attributes = new AttributeMap(DefaultAttributes.getSupplier(type), this); // Purpur - Ridables
+         this.initAttributes(); // Purpur - Configurable entity base attributes
+         this.craftAttributes = new org.bukkit.craftbukkit.attribute.CraftAttributeMap(this.attributes); // CraftBukkit
+@@ -1458,7 +1468,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+             return (float) player.getBukkitEntity().getHealth();
+         }
+         // CraftBukkit end
+-        return this.pyzh$healthMirrored ? this.pyzh$health : this.entityData.get(DATA_HEALTH_ID); // Pyzh - Mirror living entity health
++        return this.pyzh$health; // Pyzh - Mirror hot synced entity data
+     }
+ 
+     // Paper start - Check for NaN
+@@ -4876,7 +4886,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     }
+ 
+     public Optional<BlockPos> getSleepingPos() {
+-        return this.entityData.get(SLEEPING_POS_ID);
++        return this.pyzh$sleepingPos; // Pyzh - Mirror hot synced entity data
+     }
+ 
+     public void setSleepingPos(final BlockPos bedPosition) {
+diff --git a/net/minecraft/world/entity/Mob.java b/net/minecraft/world/entity/Mob.java
+index 5838d9605c6885e06c40b014fb8bcb47b32f1da0..848a5543a80b96481a029df73d30e5d5122fb72d 100644
+--- a/net/minecraft/world/entity/Mob.java
++++ b/net/minecraft/world/entity/Mob.java
+@@ -1561,30 +1561,49 @@ public abstract class Mob extends LivingEntity implements Targeting, EquipmentUs
+     }
+ 
+     public void setNoAi(final boolean flag) {
+-        byte val = this.entityData.get(DATA_MOB_FLAGS_ID);
++        byte val = this.pyzh$mobFlags; // Pyzh - Mirror hot synced entity data
+         this.entityData.set(DATA_MOB_FLAGS_ID, flag ? (byte)(val | 1) : (byte)(val & -2));
+     }
+ 
+     public void setLeftHanded(final boolean flag) {
+-        byte val = this.entityData.get(DATA_MOB_FLAGS_ID);
++        byte val = this.pyzh$mobFlags; // Pyzh - Mirror hot synced entity data
+         this.entityData.set(DATA_MOB_FLAGS_ID, flag ? (byte)(val | 2) : (byte)(val & -3));
+     }
+ 
+     public void setAggressive(final boolean flag) {
+-        byte val = this.entityData.get(DATA_MOB_FLAGS_ID);
++        byte val = this.pyzh$mobFlags; // Pyzh - Mirror hot synced entity data
+         this.entityData.set(DATA_MOB_FLAGS_ID, flag ? (byte)(val | 4) : (byte)(val & -5));
+     }
+ 
++    // Pyzh start - Mirror hot synced entity data
++    private byte pyzh$mobFlags;
++
++    @Override
++    protected void pyzh$loadSyncedMirrors() {
++        super.pyzh$loadSyncedMirrors();
++        this.pyzh$mobFlags = this.entityData.get(DATA_MOB_FLAGS_ID);
++    }
++
++    @Override
++    public void pyzh$onSyncedValueWritten(final EntityDataAccessor<?> accessor, final Object value) {
++        if (accessor == DATA_MOB_FLAGS_ID) {
++            this.pyzh$mobFlags = (Byte) value;
++        } else {
++            super.pyzh$onSyncedValueWritten(accessor, value);
++        }
++    }
++    // Pyzh end - Mirror hot synced entity data
++
+     public boolean isNoAi() {
+-        return (this.entityData.get(DATA_MOB_FLAGS_ID) & 1) != 0;
++        return (this.pyzh$mobFlags & 1) != 0; // Pyzh - Mirror hot synced entity data
+     }
+ 
+     public boolean isLeftHanded() {
+-        return (this.entityData.get(DATA_MOB_FLAGS_ID) & 2) != 0;
++        return (this.pyzh$mobFlags & 2) != 0; // Pyzh - Mirror hot synced entity data
+     }
+ 
+     public boolean isAggressive() {
+-        return (this.entityData.get(DATA_MOB_FLAGS_ID) & 4) != 0;
++        return (this.pyzh$mobFlags & 4) != 0; // Pyzh - Mirror hot synced entity data
+     }
+ 
+     public void setBaby(final boolean baby) {
+diff --git a/net/minecraft/world/entity/item/ItemEntity.java b/net/minecraft/world/entity/item/ItemEntity.java
+index 4af419e983c0fc2afc2a7040af1e85617f3a0e02..0648c0059b98be2047d4c321c933789599512b53 100644
+--- a/net/minecraft/world/entity/item/ItemEntity.java
++++ b/net/minecraft/world/entity/item/ItemEntity.java
+@@ -540,9 +540,28 @@ public class ItemEntity extends Entity implements TraceableEntity, net.caffeinem
+     }
+ 
+     public ItemStack getItem() {
+-        return this.getEntityData().get(DATA_ITEM);
++        return this.pyzh$item; // Pyzh - Mirror hot synced entity data
+     }
+ 
++    // Pyzh start - Mirror hot synced entity data
++    private ItemStack pyzh$item;
++
++    @Override
++    protected void pyzh$loadSyncedMirrors() {
++        super.pyzh$loadSyncedMirrors();
++        this.pyzh$item = this.getEntityData().get(DATA_ITEM);
++    }
++
++    @Override
++    public void pyzh$onSyncedValueWritten(final net.minecraft.network.syncher.EntityDataAccessor<?> accessor, final Object value) {
++        if (accessor == DATA_ITEM) {
++            this.pyzh$item = (ItemStack) value;
++        } else {
++            super.pyzh$onSyncedValueWritten(accessor, value);
++        }
++    }
++    // Pyzh end - Mirror hot synced entity data
++
+     public void setItem(final ItemStack itemStack) {
+         // Leaves start - Lithium Sleeping Block Entity
+         if (org.dreeam.leaf.config.modules.opt.SleepingBlockEntity.enabled && this.subscriber != null) {

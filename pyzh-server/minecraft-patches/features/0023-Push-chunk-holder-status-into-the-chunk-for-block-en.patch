@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 27 Sep 2026 11:49:55 +0300
+Subject: [PATCH] Push chunk holder status into the chunk for block entity
+ ticking
+
+Every ticking block entity checked the chunk's full status through a
+supplier into the chunk holder, a cache miss per ticker, and then looked
+the chunk holder up by key to see whether entities were loaded. The
+holder now writes each status change into its LevelChunk from
+updateCurrentState, its only status writer, and the chunk reads that
+field. While the status is BLOCK_TICKING or above the holder is in the
+table with a completed chunk, so the entity-load lookup is skipped for
+positions inside the chunk; other positions keep the lookup.
+LevelChunk.getBlockEntity also skips the captured block entity map when
+nothing is captured, as Level.getBlockEntity already does.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+index 0ca348d43143d11ba6dd0e6df33b5ee90ad8c381..b2ca6660852eefa10c4b04894262cd6924fe7bfa 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
+@@ -1192,6 +1192,7 @@ public final class NewChunkHolder {
+ 
+     private void updateCurrentState(final FullChunkStatus to) {
+         this.currentFullChunkStatus = to;
++        if (this.currentChunk instanceof net.minecraft.world.level.chunk.LevelChunk levelChunk) levelChunk.pyzh$onHolderStatusChanged(this, to); // Pyzh - Push chunk holder status into the chunk
+     }
+ 
+     // only to be called on the main thread, no locks need to be held
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkFullTask.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkFullTask.java
+index 96ccb8f657d755b2e58a8dd0cda00ca0df4886b2..ece80570cf4a36bfee030a4b8e749661468a2cbc 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkFullTask.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkFullTask.java
+@@ -74,7 +74,7 @@ public final class ChunkFullTask extends ChunkProgressionTask implements Runnabl
+ 
+             final NewChunkHolder chunkHolder = this.chunkHolder;
+ 
+-            chunk.setFullStatus(chunkHolder::getChunkStatus);
++            chunk.pyzh$setFullStatusHolder(chunkHolder); // Pyzh - Push chunk holder status into the chunk
+             try {
+                 platformHooks.setCurrentlyLoading(this.chunkHolder.vanillaChunkHolder, chunk);
+                 chunk.runPostLoad();
+diff --git a/net/minecraft/world/level/chunk/LevelChunk.java b/net/minecraft/world/level/chunk/LevelChunk.java
+index 83bd58a65b1b27ebddfeaf2477e00dbf6268246f..168578f988075249c377846b3fbd6cbfa9caa6cd 100644
+--- a/net/minecraft/world/level/chunk/LevelChunk.java
++++ b/net/minecraft/world/level/chunk/LevelChunk.java
+@@ -546,7 +546,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+ 
+     public @Nullable BlockEntity getBlockEntity(final BlockPos pos, final LevelChunk.EntityCreationType creationType) {
+         // CraftBukkit start
+-        BlockEntity blockEntity = this.level.capturedBlockEntities.get(pos);
++        BlockEntity blockEntity = this.level.capturedBlockEntities.isEmpty() ? null : this.level.capturedBlockEntities.get(pos); // Pyzh - Skip the captured lookup when nothing is captured
+         if (blockEntity == null) {
+             blockEntity = this.blockEntities.get(pos);
+         }
+@@ -592,11 +592,19 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+         return this.loaded || this.level.isClientSide();
+     }
+ 
++    // Pyzh start - Skip the entity-load lookup for this chunk's own positions
++    // While this chunk's holder is at BLOCK_TICKING or above it stays in the holder table with a completed chunk,
++    // so areEntitiesLoaded is true for any position inside this chunk.
++    private boolean pyzh$isInChunk(final BlockPos pos) {
++        return (pos.getX() >> 4) == this.locX && (pos.getZ() >> 4) == this.locZ;
++    }
++    // Pyzh end - Skip the entity-load lookup for this chunk's own positions
++
+     private boolean isTicking(final BlockPos pos) {
+         return this.level.getWorldBorder().isWithinBounds(pos)
+             && (
+                 !(this.level instanceof ServerLevel serverLevel)
+-                    || this.getFullStatus().isOrAfter(FullChunkStatus.BLOCK_TICKING) && serverLevel.areEntitiesLoaded(ChunkPos.pack(pos))
++                    || this.getFullStatus().isOrAfter(FullChunkStatus.BLOCK_TICKING) && (this.pyzh$isInChunk(pos) || serverLevel.areEntitiesLoaded(ChunkPos.pack(pos))) // Pyzh - Skip the entity-load lookup for this chunk's own positions
+             );
+     }
+ 
+@@ -945,12 +953,33 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+     }
+ 
+     public FullChunkStatus getFullStatus() {
++        if (this.pyzh$statusHolder != null) return this.pyzh$pushedStatus; // Pyzh - Push chunk holder status into the chunk
+         return this.fullStatus == null ? FullChunkStatus.FULL : this.fullStatus.get();
+     }
+ 
+     public void setFullStatus(final Supplier<FullChunkStatus> fullStatus) {
+         this.fullStatus = fullStatus;
++        this.pyzh$statusHolder = null; // Pyzh - Push chunk holder status into the chunk
++    }
++
++    // Pyzh start - Push chunk holder status into the chunk
++    // Block entity ticking reads the status for every ticker; reading it through the holder was a cache miss each time.
++    // The holder writes every status change here (NewChunkHolder#updateCurrentState), so both always agree.
++    private ca.spottedleaf.moonrise.patches.chunk_system.scheduling.@Nullable NewChunkHolder pyzh$statusHolder;
++    private FullChunkStatus pyzh$pushedStatus;
++
++    public void pyzh$setFullStatusHolder(final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder holder) {
++        this.fullStatus = holder::getChunkStatus;
++        this.pyzh$pushedStatus = holder.getChunkStatus();
++        this.pyzh$statusHolder = holder;
++    }
++
++    public void pyzh$onHolderStatusChanged(final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.NewChunkHolder holder, final FullChunkStatus status) {
++        if (this.pyzh$statusHolder == holder) {
++            this.pyzh$pushedStatus = status;
++        }
+     }
++    // Pyzh end - Push chunk holder status into the chunk
+ 
+     public void clearAllBlockEntities() {
+         this.blockEntities.values().forEach(BlockEntity::setRemoved);
