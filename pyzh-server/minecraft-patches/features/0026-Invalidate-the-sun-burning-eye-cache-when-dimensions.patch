@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 27 Sep 2026 12:36:19 +0300
+Subject: [PATCH] Invalidate the sun-burning eye cache when dimensions change
+
+The cached eye block is keyed only by position identity. A stationary entity can change eye height without replacing its position vector, leaving sun-burning light and sky checks at the old height. Invalidate the cache in both dimension update paths.
+
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index 0cc656758088300cabb2e9636309f7731832b631..cfce8e418e5cf198ecab547667dfe8da6d39c504 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -4805,6 +4805,7 @@ public abstract class Entity
+         EntityDimensions newDim = this.getDimensions(pose);
+         this.dimensions = newDim;
+         this.eyeHeight = newDim.eyeHeight();
++        this.cached_position = null; // Pyzh - Eye height can change without replacing the position vector.
+     }
+ 
+     public void refreshDimensions() {
+@@ -4813,6 +4814,7 @@ public abstract class Entity
+         EntityDimensions newDim = this.getDimensions(pose);
+         this.dimensions = newDim;
+         this.eyeHeight = newDim.eyeHeight();
++        this.cached_position = null; // Pyzh - Invalidate the sun-burning eye block after a dimension change.
+         this.reapplyPosition();
+         boolean isSmall = newDim.width() <= 4.0F && newDim.height() <= 4.0F;
+         if (!this.level.isClientSide()
