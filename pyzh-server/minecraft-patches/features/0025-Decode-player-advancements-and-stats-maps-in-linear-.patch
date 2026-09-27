@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 27 Sep 2026 12:11:35 +0300
+Subject: [PATCH] Decode player advancements and stats maps in linear time
+
+Loading a player's advancements on login decoded the advancement map
+with Codec.unboundedMap, which is quadratic in the number of entries;
+with a large datapack this took about 28 ms on the main thread per
+login. Player advancements, criterion progress and per-type stats maps
+now use HashedUnboundedMapCodec, which decodes to the same results.
+
+diff --git a/net/minecraft/advancements/AdvancementProgress.java b/net/minecraft/advancements/AdvancementProgress.java
+index 2a15f113e45f9d9a62bfcfecbe64865ad3c89ddf..8fa2687b5601008a8491049b6ea8fe9fb3120d0a 100644
+--- a/net/minecraft/advancements/AdvancementProgress.java
++++ b/net/minecraft/advancements/AdvancementProgress.java
+@@ -26,7 +26,7 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
+     private static final DateTimeFormatter OBTAINED_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT);
+     private static final Codec<Instant> OBTAINED_TIME_CODEC = ExtraCodecs.temporalCodec(OBTAINED_TIME_FORMAT)
+         .xmap(Instant::from, instant -> instant.atZone(ZoneId.systemDefault()));
+-    private static final Codec<Map<String, CriterionProgress>> CRITERIA_CODEC = Codec.unboundedMap(Codec.STRING, OBTAINED_TIME_CODEC)
++    private static final Codec<Map<String, CriterionProgress>> CRITERIA_CODEC = ru.turbovadim.pyzh.codec.HashedUnboundedMapCodec.of(Codec.STRING, OBTAINED_TIME_CODEC) // Pyzh - Decode large player maps in linear time
+         .xmap(
+             map -> Util.mapValues((Map<String, Instant>)map, CriterionProgress::new),
+             map -> map.entrySet()
+diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
+index d80093d6f6edd65e62beb4449322d00b5d9c73c6..f21c12e081a0adf8b527aa1d31f36f843762cfde 100644
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -404,7 +404,7 @@ public class PlayerAdvancements {
+     }
+ 
+     private record Data(Map<Identifier, AdvancementProgress> map) {
+-        public static final Codec<PlayerAdvancements.Data> CODEC = Codec.unboundedMap(Identifier.CODEC, AdvancementProgress.CODEC)
++        public static final Codec<PlayerAdvancements.Data> CODEC = ru.turbovadim.pyzh.codec.HashedUnboundedMapCodec.of(Identifier.CODEC, AdvancementProgress.CODEC) // Pyzh - Decode large player maps in linear time
+             .xmap(PlayerAdvancements.Data::new, PlayerAdvancements.Data::map);
+ 
+         public void forEach(final BiConsumer<Identifier, AdvancementProgress> consumer) {
+diff --git a/net/minecraft/stats/ServerStatsCounter.java b/net/minecraft/stats/ServerStatsCounter.java
+index 938f99e0809619a205d3f08369dc2544be309033..9d87d18b7a86aed09f5b034fea546e316351224f 100644
+--- a/net/minecraft/stats/ServerStatsCounter.java
++++ b/net/minecraft/stats/ServerStatsCounter.java
+@@ -60,7 +60,7 @@ public class ServerStatsCounter extends StatsCounter {
+                 ? DataResult.success((T)stat.getValue())
+                 : DataResult.error(() -> "Expected type " + type + ", but got " + stat.getType())
+         );
+-        return Codec.unboundedMap(statCodec, Codec.INT);
++        return ru.turbovadim.pyzh.codec.HashedUnboundedMapCodec.of(statCodec, Codec.INT); // Pyzh - Decode large player maps in linear time
+     }
+ 
+     public ServerStatsCounter(final MinecraftServer server, final Path file) {

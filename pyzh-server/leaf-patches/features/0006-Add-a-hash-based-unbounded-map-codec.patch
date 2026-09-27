@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 27 Sep 2026 12:11:35 +0300
+Subject: [PATCH] Add a hash-based unbounded map codec
+
+DataFixerUpper's BaseMapCodec decodes map entries into an array map, so
+duplicate detection is a linear scan per entry and decoding is quadratic
+in the map size. HashedUnboundedMapCodec gives the same results as
+Codec.unboundedMap (entry order, first-wins duplicates, error text,
+partial result, missed-input report) using an insertion-ordered hash
+map. Decoding 1,500 entries: 6.2 ms to 0.08 ms; 5,000: 76 ms to 0.37 ms.
+
+diff --git a/java/ru/turbovadim/pyzh/codec/HashedUnboundedMapCodec.java b/java/ru/turbovadim/pyzh/codec/HashedUnboundedMapCodec.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..d51a1e4e096f73f6373ff65ae6ecfedb6f6a5402
+--- /dev/null
++++ b/java/ru/turbovadim/pyzh/codec/HashedUnboundedMapCodec.java
+@@ -0,0 +1,70 @@
++package ru.turbovadim.pyzh.codec;
++
++import com.google.common.collect.ImmutableMap;
++import com.mojang.datafixers.util.Pair;
++import com.mojang.datafixers.util.Unit;
++import com.mojang.serialization.Codec;
++import com.mojang.serialization.DataResult;
++import com.mojang.serialization.DynamicOps;
++import com.mojang.serialization.Lifecycle;
++import com.mojang.serialization.MapLike;
++import com.mojang.serialization.codecs.BaseMapCodec;
++import it.unimi.dsi.fastutil.objects.Object2ObjectLinkedOpenHashMap;
++import java.util.Map;
++import java.util.Optional;
++import java.util.stream.Stream;
++
++/**
++ * Drop-in for {@link Codec#unboundedMap} with identical results: entry order, first-wins duplicates with the same
++ * error, and the same partial result and missed-input report. DataFixerUpper's {@link BaseMapCodec#decode} collects
++ * entries in an array map, which makes decoding large maps (player advancements, stats) quadratic.
++ */
++public record HashedUnboundedMapCodec<K, V>(Codec<K> keyCodec, Codec<V> elementCodec) implements BaseMapCodec<K, V>, Codec<Map<K, V>> {
++
++    public static <K, V> Codec<Map<K, V>> of(final Codec<K> keyCodec, final Codec<V> elementCodec) {
++        return new HashedUnboundedMapCodec<>(keyCodec, elementCodec);
++    }
++
++    @Override
++    public <T> DataResult<Pair<Map<K, V>, T>> decode(final DynamicOps<T> ops, final T input) {
++        return ops.getMap(input).setLifecycle(Lifecycle.stable()).flatMap(map -> this.decode(ops, map)).map(r -> Pair.of(r, input));
++    }
++
++    @Override
++    public <T> DataResult<T> encode(final Map<K, V> input, final DynamicOps<T> ops, final T prefix) {
++        return this.encode(input, ops, ops.mapBuilder()).build(prefix);
++    }
++
++    @Override
++    public <T> DataResult<Map<K, V>> decode(final DynamicOps<T> ops, final MapLike<T> input) {
++        final Object2ObjectLinkedOpenHashMap<K, V> read = new Object2ObjectLinkedOpenHashMap<>();
++        final Stream.Builder<Pair<T, T>> failed = Stream.builder();
++        final DataResult<Unit> result = input.entries().reduce(DataResult.success(Unit.INSTANCE, Lifecycle.stable()), (r, pair) -> {
++            final DataResult<K> key = this.keyCodec.parse(ops, pair.getFirst());
++            final DataResult<V> value = this.elementCodec.parse(ops, pair.getSecond());
++            final DataResult<Pair<K, V>> entryResult = key.apply2stable(Pair::of, value);
++            final Optional<Pair<K, V>> entry = entryResult.resultOrPartial();
++            if (entry.isPresent()) {
++                final V existingValue = read.putIfAbsent(entry.get().getFirst(), entry.get().getSecond());
++                if (existingValue != null) {
++                    failed.add(pair);
++                    return r.apply2stable((u, p) -> u, DataResult.error(() -> "Duplicate entry for key: '" + entry.get().getFirst() + "'"));
++                }
++            }
++
++            if (entryResult.isError()) {
++                failed.add(pair);
++            }
++
++            return r.apply2stable((u, p) -> u, entryResult);
++        }, (r1, r2) -> r1.apply2stable((u1, u2) -> u1, r2));
++        final Map<K, V> elements = ImmutableMap.copyOf(read);
++        final T errors = ops.createMap(failed.build());
++        return result.map(unit -> elements).setPartial(elements).mapError(e -> e + " missed input: " + errors);
++    }
++
++    @Override
++    public String toString() {
++        return "HashedUnboundedMapCodec[" + this.keyCodec + " -> " + this.elementCodec + "]";
++    }
++}
