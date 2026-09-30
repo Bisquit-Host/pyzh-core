@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 27 Sep 2026 13:05:18 +0300
+Subject: [PATCH] Mirror bounding box coordinates for entity section scans
+
+Entity box queries (pushing, target goals, sensors, collisions) test
+every entity in the scanned sections, loading the entity and then its
+separately allocated AABB, which is replaced on every move and so
+scattered on the heap. Entities now also keep the six box coordinates
+in plain fields, written together with bb in setBoundingBox, its only
+writer. The section scans read them on tick threads, where entities
+move; other threads still read the AABB, since the six fields are not
+updated atomically. JMH, 1,100-entity section: 3.52 to 2.56 ms per
+query round; no difference when the section fits in cache.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
+index 9f1c345ddb428f71e94cf8da195b98dea7fa656f..569d414d97516f9edd413e95195653f0d8c1d30e 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
+@@ -593,6 +593,7 @@ public final class ChunkEntitySlices {
+             final double boxMaxX = box.maxX;
+             final double boxMaxY = box.maxY;
+             final double boxMaxZ = box.maxZ;
++            final boolean mirrored = ca.spottedleaf.moonrise.common.util.TickThread.isTickThread(); // Pyzh - Mirror bounding box coordinates for entity scans
+ 
+             for (int section = min; section <= max; ++section) {
+                 final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
+@@ -612,8 +613,7 @@ public final class ChunkEntitySlices {
+                     }
+ 
+                     // Inline AABB#intersects to avoid a method call and use the cached AABB fields.
+-                    final AABB entityBB = entity.getBoundingBox();
+-                    if (entityBB.maxX <= boxMinX || entityBB.minX >= boxMaxX || entityBB.maxY <= boxMinY || entityBB.minY >= boxMaxY || entityBB.maxZ <= boxMinZ || entityBB.minZ >= boxMaxZ) {
++                    if (entity.pyzh$isOutside(boxMinX, boxMinY, boxMinZ, boxMaxX, boxMaxY, boxMaxZ, mirrored)) { // Pyzh - Mirror bounding box coordinates for entity scans
+                         // Leaf end - Optimise getEntities
+                         continue;
+                     }
+@@ -650,6 +650,7 @@ public final class ChunkEntitySlices {
+             final double boxMaxX = box.maxX;
+             final double boxMaxY = box.maxY;
+             final double boxMaxZ = box.maxZ;
++            final boolean mirrored = ca.spottedleaf.moonrise.common.util.TickThread.isTickThread(); // Pyzh - Mirror bounding box coordinates for entity scans
+ 
+             for (int section = min; section <= max; ++section) {
+                 final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
+@@ -668,8 +669,7 @@ public final class ChunkEntitySlices {
+                     }
+ 
+                     // Inline AABB#intersects to avoid a method call and use the cached AABB fields.
+-                    final AABB entityBB = entity.getBoundingBox();
+-                    if (entityBB.maxX <= boxMinX || entityBB.minX >= boxMaxX || entityBB.maxY <= boxMinY || entityBB.minY >= boxMaxY || entityBB.maxZ <= boxMinZ || entityBB.minZ >= boxMaxZ) {
++                    if (entity.pyzh$isOutside(boxMinX, boxMinY, boxMinZ, boxMaxX, boxMaxY, boxMaxZ, mirrored)) { // Pyzh - Mirror bounding box coordinates for entity scans
+                         // Leaf end - Optimise getEntities
+                         continue;
+                     }
+@@ -707,6 +707,7 @@ public final class ChunkEntitySlices {
+             final double boxMaxX = box.maxX;
+             final double boxMaxY = box.maxY;
+             final double boxMaxZ = box.maxZ;
++            final boolean mirrored = ca.spottedleaf.moonrise.common.util.TickThread.isTickThread(); // Pyzh - Mirror bounding box coordinates for entity scans
+ 
+             for (int section = min; section <= max; ++section) {
+                 final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
+@@ -723,8 +724,7 @@ public final class ChunkEntitySlices {
+                         continue;
+                     }
+ 
+-                    final AABB entityBB = entity.getBoundingBox();
+-                    if (entityBB.maxX <= boxMinX || entityBB.minX >= boxMaxX || entityBB.maxY <= boxMinY || entityBB.minY >= boxMaxY || entityBB.maxZ <= boxMinZ || entityBB.minZ >= boxMaxZ) {
++                    if (entity.pyzh$isOutside(boxMinX, boxMinY, boxMinZ, boxMaxX, boxMaxY, boxMaxZ, mirrored)) { // Pyzh - Mirror bounding box coordinates for entity scans
+                         continue;
+                     }
+ 
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index cfce8e418e5cf198ecab547667dfe8da6d39c504..f3eb366a6d3f8f92ccf5654ff10ec7c72712f600 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -282,6 +282,8 @@ public abstract class Entity
+     public float yRotO;
+     public float xRotO;
+     private AABB bb = INITIAL_AABB;
++    // Pyzh - Mirror bounding box coordinates for entity scans; always equal to bb's, see pyzh$isOutside
++    private double pyzh$bbMinX, pyzh$bbMinY, pyzh$bbMinZ, pyzh$bbMaxX, pyzh$bbMaxY, pyzh$bbMaxZ;
+     private boolean boundingBoxChanged = false; // Gale - VMP - skip entity move if movement is zero
+     public boolean onGround;
+     public boolean horizontalCollision;
+@@ -4898,10 +4900,32 @@ public abstract class Entity
+         len = bb.maxZ - bb.minZ;
+         if (len < 0) maxZ = minZ;
+         if (len > 64) maxZ = minZ + 64.0;
+-        this.bb = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
++        // Pyzh start - Mirror bounding box coordinates for entity scans
++        final AABB box = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
++        this.bb = box;
++        this.pyzh$bbMinX = box.minX;
++        this.pyzh$bbMinY = box.minY;
++        this.pyzh$bbMinZ = box.minZ;
++        this.pyzh$bbMaxX = box.maxX;
++        this.pyzh$bbMaxY = box.maxY;
++        this.pyzh$bbMaxZ = box.maxZ;
++        // Pyzh end - Mirror bounding box coordinates for entity scans
+         // CraftBukkit end
+     }
+ 
++    // Pyzh start - Mirror bounding box coordinates for entity scans
++    // Box test for entity section scans: true when this entity's box does not intersect the given one.
++    // Entity scans test every nearby entity; the mirrored coordinates skip loading the separate AABB object.
++    // They are written field by field, so they are only read on tick threads (mirrored = true), where entities move.
++    public final boolean pyzh$isOutside(final double minX, final double minY, final double minZ, final double maxX, final double maxY, final double maxZ, final boolean mirrored) {
++        if (mirrored) {
++            return this.pyzh$bbMaxX <= minX || this.pyzh$bbMinX >= maxX || this.pyzh$bbMaxY <= minY || this.pyzh$bbMinY >= maxY || this.pyzh$bbMaxZ <= minZ || this.pyzh$bbMinZ >= maxZ;
++        }
++        final AABB box = this.bb;
++        return box.maxX <= minX || box.minX >= maxX || box.maxY <= minY || box.minY >= maxY || box.maxZ <= minZ || box.minZ >= maxZ;
++    }
++    // Pyzh end - Mirror bounding box coordinates for entity scans
++
+     public final float getEyeHeight(final Pose pose) {
+         return this.getDimensions(pose).eyeHeight();
+     }

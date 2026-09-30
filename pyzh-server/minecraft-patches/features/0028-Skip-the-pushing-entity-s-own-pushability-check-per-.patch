@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 27 Sep 2026 13:05:18 +0300
+Subject: [PATCH] Skip the pushing entity's own pushability check per candidate
+
+pushEntities returns early unless the entity is pushable, and nothing
+can change that while candidates are collected, yet the pushableBy
+predicate re-ran the entity's canCollideWithBukkit, including
+isPushable and onClimbable, for every candidate. pushEntities now uses
+pushableByPushable, which checks only the entity's collidable
+exemptions on its side. Other pushableBy callers are unchanged.
+
+diff --git a/net/minecraft/world/entity/EntitySelector.java b/net/minecraft/world/entity/EntitySelector.java
+index 9526f091bdde7f91a8e1d437e8faaecbeec63bf1..f39fa5d2ac0b005ed8f62774211f4aded9e08f39 100644
+--- a/net/minecraft/world/entity/EntitySelector.java
++++ b/net/minecraft/world/entity/EntitySelector.java
+@@ -45,12 +45,24 @@ public final class EntitySelector {
+     }
+ 
+     public static Predicate<Entity> pushableBy(final Entity entity) {
++        // Pyzh start - Skip the pushing entity's own pushability check per candidate
++        return pushableBy(entity, null);
++    }
++
++    // For a source already known to be pushable: its isPushable() cannot change while candidates are collected, so only its
++    // collidable exemptions are checked per candidate instead of repeating the whole canCollideWithBukkit.
++    public static Predicate<Entity> pushableByPushable(final LivingEntity entity) {
++        return pushableBy(entity, entity);
++    }
++
++    private static Predicate<Entity> pushableBy(final Entity entity, final @org.jspecify.annotations.Nullable LivingEntity knownPushable) {
++        // Pyzh end - Skip the pushing entity's own pushability check per candidate
+         Team ownTeam = entity.getTeam();
+         Team.CollisionRule ownCollisionRule = ownTeam == null ? Team.CollisionRule.ALWAYS : ownTeam.getCollisionRule();
+         return ownCollisionRule == Team.CollisionRule.NEVER
+             ? Predicates.alwaysFalse()
+             : input -> { // Leaf - optimize pushable selector
+-                    if (input.isSpectator() /*|| !pushedEntity.isPushable()*/ || !input.canCollideWithBukkit(entity) || !entity.canCollideWithBukkit(input)) { // CraftBukkit - collidable API // Paper - Climbing should not bypass cramming gamerule // Leaf - optimize pushable selector
++                    if (input.isSpectator() /*|| !pushedEntity.isPushable()*/ || !input.canCollideWithBukkit(entity) || !(knownPushable != null ? knownPushable.pyzh$collidesWithBukkit(input) : entity.canCollideWithBukkit(input))) { // CraftBukkit - collidable API // Paper - Climbing should not bypass cramming gamerule // Leaf - optimize pushable selector // Pyzh - Skip the pushing entity's own pushability check per candidate
+                         return false;
+                     }
+ 
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 97ddbe649d849441d8e10694ab35b579ac716979..ed86146aa8a58d7af68f800897297b79180a401c 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -4137,7 +4137,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+         final org.dreeam.leaf.world.EntityPushState pushState = this.level().pushEntityQueryState;
+         pushState.reset(this, maxCramming, maxEntityCollisions);
+         try {
+-        this.forEachNearbyPushableEntity(this, box, EntitySelector.pushableBy(this), pushState);
++        this.forEachNearbyPushableEntity(this, box, EntitySelector.pushableByPushable(this), pushState); // Pyzh - Skip the pushing entity's own pushability check per candidate
+         // Leaf end - Limit pushable entity queries
+         if (pushState.foundAny) { // Leaf - Limit pushable entity queries
+             // Leaf start - Limit pushable entity queries
+@@ -4351,7 +4351,12 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+     // CraftBukkit start - collidable API
+     @Override
+     public boolean canCollideWithBukkit(Entity entity) {
+-        return this.isPushable() && this.collides != (!this.collidableExemptions.isEmpty() && this.collidableExemptions.contains(entity.getUUID())); // Leaf - Optimize map lookups with isEmpty check
++        return this.isPushable() && this.pyzh$collidesWithBukkit(entity); // Pyzh - Skip the pushing entity's own pushability check per candidate
++    }
++
++    // Pyzh - canCollideWithBukkit without the isPushable() part, for callers that already know this entity is pushable
++    public final boolean pyzh$collidesWithBukkit(final Entity entity) {
++        return this.collides != (!this.collidableExemptions.isEmpty() && this.collidableExemptions.contains(entity.getUUID())); // Leaf - Optimize map lookups with isEmpty check
+     }
+     // CraftBukkit end
+ 
