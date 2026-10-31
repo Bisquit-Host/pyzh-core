@@ -27,6 +27,14 @@ The distributable server JAR is written to:
 pyzh-server/build/libs/pyzh-paperclip-26.2.local-SNAPSHOT.jar
 ```
 
+`Bukkit.getBukkitVersion()` reports `26.2-R0.1-SNAPSHOT` for plugin compatibility.
+Artifact versions stay separate: local builds use `26.2.local-SNAPSHOT`; CI builds use
+`26.2.build.<number>-alpha`, with `BUILD_NUMBER` set to the GitHub Actions run number.
+The server manifest records the build number and Git commit.
+
+New `server.properties` files default `bug-report-link` to
+`https://github.com/Bisquit-Host/pyzh-core/issues`. Existing files keep their configured value.
+
 ## Repository layout
 
 Only Pyzh's own patches are tracked. Everything else is generated and gitignored.

@@ -1,0 +1,12 @@
+--- a/leaf-api/build.gradle.kts
++++ b/leaf-api/build.gradle.kts
+@@ -214,7 +_,8 @@
+ // Gale end - hide irrelevant compilation warnings
+ val generateApiVersioningFile = tasks.register<GenerateApiVersioningFile>("generateApiVersioningFile") {
+     outputFile.set(layout.buildDirectory.file("apiVersioning.json"))
+-    projectVersion.set(project.version.toString())
++    // Pyzh - Bukkit plugins parse this as a Minecraft version, not a Maven artifact version.
++    projectVersion.set(rootProject.providers.gradleProperty("mcVersion").map { "$it-R0.1-SNAPSHOT" })
+     apiVersion.set(rootProject.providers.gradleProperty("apiVersion"))
+ }
+ 

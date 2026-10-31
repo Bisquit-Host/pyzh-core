@@ -22,6 +22,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
 
     steps:
       - name: Check out repository
