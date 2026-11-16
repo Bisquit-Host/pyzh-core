@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 1 Nov 2026 01:32:37 +0300
+Subject: [PATCH] Compress player NBT on the player IO thread
+
+
+diff --git a/net/minecraft/world/level/storage/PlayerDataStorage.java b/net/minecraft/world/level/storage/PlayerDataStorage.java
+index e7f931b1f7adac7fc3e372334277457553deaed7..2bcd7664d4d329dd25422076c0620b952fa81cd9 100644
+--- a/net/minecraft/world/level/storage/PlayerDataStorage.java
++++ b/net/minecraft/world/level/storage/PlayerDataStorage.java
+@@ -52,19 +52,12 @@ public class PlayerDataStorage {
+         if (org.spigotmc.SpigotConfig.disablePlayerDataSaving) return; // Pyzh - apply persistence guards to offline/generic saves too
+         if (org.dreeam.leaf.config.modules.misc.RegionFormatConfig.isReadOnlyMode()) return; // Pyzh - preserve read-only mode for offline updates
+ 
+-        var nbtBytes = new it.unimi.dsi.fastutil.io.FastByteArrayOutputStream(65536);
+-        try {
+-            NbtIo.writeCompressed(compoundTag, nbtBytes);
+-        } catch (Exception exception) {
+-            LOGGER.warn("Failed to encode player data for {}", stringId, exception);
+-            return;
+-        }
+-        final byte[] encodedData = java.util.Arrays.copyOf(nbtBytes.array, nbtBytes.length);
+-        org.dreeam.leaf.async.AsyncPlayerDataSaving.submitPlayer(uniqueId, encodedData, snapshot -> {
++        // Pyzh - Keep the NBT snapshot on submission; compress directly to the temporary file on the I/O thread.
++        org.dreeam.leaf.async.AsyncPlayerDataSaving.submitPlayer(uniqueId, compoundTag, snapshot -> {
+             try {
+                 Path playerDirPath = this.playerDir.toPath();
+                 Path tmpFile = Files.createTempFile(playerDirPath, stringId + "-", ".dat");
+-                org.apache.commons.io.FileUtils.writeByteArrayToFile(tmpFile.toFile(), snapshot, false);
++                NbtIo.writeCompressed(snapshot, tmpFile); // Pyzh - Avoid foreground compression and intermediate byte arrays.
+                 Path realFile = playerDirPath.resolve(stringId + ".dat");
+                 Path oldFile = playerDirPath.resolve(stringId + ".dat_old");
+                 Util.safeReplaceFile(realFile, tmpFile, oldFile);
+@@ -97,13 +90,9 @@ public class PlayerDataStorage {
+     private Optional<CompoundTag> load(final NameAndId nameAndId, final String suffix) {
+         // Pyzh start - read the latest accepted save without waiting for disk I/O
+         if (suffix.equals(".dat")) {
+-            final Optional<byte[]> pendingData = org.dreeam.leaf.async.AsyncPlayerDataSaving.getPendingPlayerData(nameAndId.id());
++            final Optional<CompoundTag> pendingData = org.dreeam.leaf.async.AsyncPlayerDataSaving.getPendingPlayerData(nameAndId.id());
+             if (pendingData.isPresent()) {
+-                try {
+-                    return Optional.of(NbtIo.readCompressed(new java.io.ByteArrayInputStream(pendingData.get()), NbtAccounter.unlimitedHeap()));
+-                } catch (Exception exception) {
+-                    LOGGER.warn("Failed to load pending player data for {}", nameAndId.name(), exception);
+-                }
++                return pendingData; // Pyzh - Already an independent copy; no compression round trip for quick rejoins.
+             }
+         }
+         // Pyzh end - read the latest accepted save without waiting for disk I/O

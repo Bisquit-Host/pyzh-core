@@ -1,0 +1,224 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 1 Nov 2026 01:32:37 +0300
+Subject: [PATCH] Select nearest entities during spatial traversal
+
+
+diff --git a/net/minecraft/server/level/NearestEntityQuery.java b/net/minecraft/server/level/NearestEntityQuery.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..c60334b3c82acc6209d244e1f249d1ff9728a9ce
+--- /dev/null
++++ b/net/minecraft/server/level/NearestEntityQuery.java
+@@ -0,0 +1,59 @@
++package net.minecraft.server.level;
++
++import java.util.Collections;
++import java.util.function.Predicate;
++import net.minecraft.tags.TagKey;
++import net.minecraft.util.profiling.Profiler;
++import net.minecraft.world.entity.EntityType;
++import net.minecraft.world.entity.LivingEntity;
++import net.minecraft.world.entity.ai.targeting.TargetingConditions;
++import net.minecraft.world.phys.AABB;
++import org.jspecify.annotations.Nullable;
++
++// Pyzh - Collect only the nearest result, using the existing spatial traversal and targeting checks.
++final class NearestEntityQuery<T extends LivingEntity> implements Predicate<T> {
++    private final ServerLevel level;
++    private final TargetingConditions conditions;
++    private final @Nullable LivingEntity source;
++    private final double x;
++    private final double y;
++    private final double z;
++    private final @Nullable TagKey<EntityType<?>> tag;
++    private double bestDistance;
++    private @Nullable T nearest;
++
++    private NearestEntityQuery(final ServerLevel level, final TargetingConditions conditions, final @Nullable LivingEntity source,
++                       final double x, final double y, final double z, final @Nullable TagKey<EntityType<?>> tag) {
++        this.level = level;
++        this.conditions = conditions;
++        this.source = source;
++        this.x = x;
++        this.y = y;
++        this.z = z;
++        this.tag = tag;
++        this.bestDistance = tag == null ? -1.0 : Double.MAX_VALUE;
++    }
++
++    static <T extends LivingEntity> @Nullable T find(final ServerLevel level, final Class<? extends T> type,
++                                                    final TargetingConditions conditions, final @Nullable LivingEntity source,
++                                                    final double x, final double y, final double z, final AABB box,
++                                                    final @Nullable TagKey<EntityType<?>> tag) {
++        final NearestEntityQuery<T> query = new NearestEntityQuery<>(level, conditions, source, x, y, z, tag);
++        Profiler.get().incrementCounter("getEntities");
++        level.moonrise$getEntityLookup().getEntities(type, null, box, Collections.emptyList(), query);
++        return query.nearest;
++    }
++
++    @Override
++    public boolean test(final T entity) {
++        // Keep every targeting test in traversal order, including line-of-sight and selector calls.
++        if ((this.tag == null || entity.is(this.tag)) && this.conditions.test(this.level, this.source, entity)) {
++            final double distance = entity.distanceToSqr(this.x, this.y, this.z);
++            if (this.bestDistance == -1.0 || distance < this.bestDistance) {
++                this.bestDistance = distance;
++                this.nearest = entity;
++            }
++        }
++        return false; // The scan never appends to its empty result list.
++    }
++}
+diff --git a/net/minecraft/server/level/ServerEntityGetter.java b/net/minecraft/server/level/ServerEntityGetter.java
+index 385580def510bbbac710c61713fd3a2fa5902825..9d6153587a2bc71489c3fb5c13c3c963b8baead8 100644
+--- a/net/minecraft/server/level/ServerEntityGetter.java
++++ b/net/minecraft/server/level/ServerEntityGetter.java
+@@ -50,12 +50,7 @@ public interface ServerEntityGetter extends EntityGetter {
+         // candidate being dropped for one tick. Arbitrary third-party predicates are *not* safe here and
+         // are still applied after the scan - see the Bukkit-side counterpart in CraftWorld.
+         final ServerLevel level = this.getLevel();
+-        return this.getNearestEntity(
+-            this.getEntitiesOfClass(type, bb, entity -> targetConditions.test(level, source, entity)),
+-            x,
+-            y,
+-            z
+-        );
++        return NearestEntityQuery.find(level, type, targetConditions, source, x, y, z, bb, null); // Pyzh - Retain only the nearest result.
+         // Pyzh end - filter nearby entity queries during spatial collection
+     }
+ 
+@@ -68,22 +63,11 @@ public interface ServerEntityGetter extends EntityGetter {
+         final double z,
+         final AABB bb
+     ) {
+-        double bestDistance = Double.MAX_VALUE;
+-        LivingEntity nearestEntity = null;
+-
+         // Pyzh start - filter nearby entity queries during spatial collection
+         // Safe to evaluate inside the scan - see getNearestEntity(Class, ...) above for the rationale.
+         final ServerLevel level = this.getLevel();
+-        for (LivingEntity entity : this.getEntitiesOfClass(LivingEntity.class, bb, e -> e.is(tag) && targetConditions.test(level, source, e))) {
+-            double distance = entity.distanceToSqr(x, y, z);
+-            if (distance < bestDistance) {
+-                bestDistance = distance;
+-                nearestEntity = entity;
+-            }
+-        }
++        return NearestEntityQuery.find(level, LivingEntity.class, targetConditions, source, x, y, z, bb, tag); // Pyzh - Retain only the nearest result.
+         // Pyzh end - filter nearby entity queries during spatial collection
+-
+-        return nearestEntity;
+     }
+ 
+     default <T extends Entity> @Nullable T getNearestEntity(final List<? extends T> entities, final double x, final double y, final double z) {
+diff --git a/net/minecraft/world/entity/ai/goal/AvoidEntityGoal.java b/net/minecraft/world/entity/ai/goal/AvoidEntityGoal.java
+index 877807f5c1f67493c07bbb06a1b3e9308e37738a..bad8b63969b5917c5b16498232a79d7a793b1302 100644
+--- a/net/minecraft/world/entity/ai/goal/AvoidEntityGoal.java
++++ b/net/minecraft/world/entity/ai/goal/AvoidEntityGoal.java
+@@ -74,16 +74,13 @@ public class AvoidEntityGoal<T extends LivingEntity> extends Goal {
+         final net.minecraft.server.level.ServerLevel level = getServerLevel(this.mob);
+         this.toAvoid = level
+             .getNearestEntity(
+-                this.mob
+-                    .level()
+-                    .getEntitiesOfClass(
+-                        this.avoidClass,
+-                        this.mob.getBoundingBox().inflate(this.maxDist, 3.0, this.maxDist),
+-                        entity -> this.avoidEntityTargeting.test(level, this.mob, entity)
+-                    ),
++                this.avoidClass,
++                this.avoidEntityTargeting,
++                this.mob,
+                 this.mob.getX(),
+                 this.mob.getY(),
+-                this.mob.getZ()
++                this.mob.getZ(),
++                this.mob.getBoundingBox().inflate(this.maxDist, 3.0, this.maxDist)
+             );
+         // Pyzh end - filter nearby entity queries during spatial collection
+         if (this.toAvoid == null) {
+diff --git a/net/minecraft/world/entity/ai/goal/LookAtPlayerGoal.java b/net/minecraft/world/entity/ai/goal/LookAtPlayerGoal.java
+index 5e2497128462c39f61d8bb8b16f740d8087528ac..aff216616d49d169ba8ae535629fd9708a68bd34 100644
+--- a/net/minecraft/world/entity/ai/goal/LookAtPlayerGoal.java
++++ b/net/minecraft/world/entity/ai/goal/LookAtPlayerGoal.java
+@@ -64,16 +64,13 @@ public class LookAtPlayerGoal extends Goal {
+             // Pyzh start - filter nearby entity queries during spatial collection
+             // See ServerEntityGetter#getNearestEntity(Class, ...) for why this is safe inside the scan.
+             this.lookAt = level.getNearestEntity(
+-                this.mob
+-                    .level()
+-                    .getEntitiesOfClass(
+-                        this.lookAtType,
+-                        this.mob.getBoundingBox().inflate(this.lookDistance, 3.0, this.lookDistance),
+-                        entity -> this.lookAtContext.test(level, this.mob, entity)
+-                    ),
++                this.lookAtType,
++                this.lookAtContext,
++                this.mob,
+                 this.mob.getX(),
+                 this.mob.getEyeY(),
+-                this.mob.getZ()
++                this.mob.getZ(),
++                this.mob.getBoundingBox().inflate(this.lookDistance, 3.0, this.lookDistance)
+             );
+             // Pyzh end - filter nearby entity queries during spatial collection
+         }
+diff --git a/net/minecraft/world/entity/ai/goal/target/NearestAttackableTargetGoal.java b/net/minecraft/world/entity/ai/goal/target/NearestAttackableTargetGoal.java
+index 6cea53fc207203e2216adf6d97673068a93a8586..ecf79576d49c55dffca08a68e33e06c53990c4ed 100644
+--- a/net/minecraft/world/entity/ai/goal/target/NearestAttackableTargetGoal.java
++++ b/net/minecraft/world/entity/ai/goal/target/NearestAttackableTargetGoal.java
+@@ -63,22 +63,18 @@ public class NearestAttackableTargetGoal<T extends LivingEntity> extends TargetG
+         ServerLevel level = getServerLevel(this.mob);
+         if (this.targetType != Player.class && this.targetType != ServerPlayer.class) {
+             // Pyzh start - filter nearby entity queries during spatial collection
+-            // Hottest target-finding path in the game: every hostile mob runs this. Filtering during the
+-            // scan avoids materialising every candidate of the target class just to discard most of them.
++            // Retain only the nearest eligible target while traversing nearby entities.
+             // See ServerEntityGetter#getNearestEntity(Class, ...) for why running TargetingConditions
+             // inside the scan is safe. getTargetConditions() is still called exactly once.
+             final TargetingConditions targetConditions = this.getTargetConditions();
+             this.target = level.getNearestEntity(
+-                this.mob
+-                    .level()
+-                    .getEntitiesOfClass(
+-                        this.targetType,
+-                        this.getTargetSearchArea(this.getFollowDistance()),
+-                        entity -> targetConditions.test(level, this.mob, entity)
+-                    ),
++                this.targetType,
++                targetConditions,
++                this.mob,
+                 this.mob.getX(),
+                 this.mob.getEyeY(),
+-                this.mob.getZ()
++                this.mob.getZ(),
++                this.getTargetSearchArea(this.getFollowDistance())
+             );
+             // Pyzh end - filter nearby entity queries during spatial collection
+         } else {
+diff --git a/net/minecraft/world/entity/animal/panda/Panda.java b/net/minecraft/world/entity/animal/panda/Panda.java
+index c6440cda5e4ecb8b0a1f39ef7560993c21c94476..05216475f4d05002bf0c295f4a511fa7f65c3e15 100644
+--- a/net/minecraft/world/entity/animal/panda/Panda.java
++++ b/net/minecraft/world/entity/animal/panda/Panda.java
+@@ -1024,16 +1024,13 @@ public class Panda extends Animal {
+                     // Pyzh start - filter nearby entity queries during spatial collection
+                     // See ServerEntityGetter#getNearestEntity(Class, ...) for why this is safe inside the scan.
+                     this.lookAt = level.getNearestEntity(
+-                        this.mob
+-                            .level()
+-                            .getEntitiesOfClass(
+-                                this.lookAtType,
+-                                this.mob.getBoundingBox().inflate(this.lookDistance, 3.0, this.lookDistance),
+-                                entity -> this.lookAtContext.test(level, this.mob, entity)
+-                            ),
++                        this.lookAtType,
++                        this.lookAtContext,
++                        this.mob,
+                         this.mob.getX(),
+                         this.mob.getEyeY(),
+-                        this.mob.getZ()
++                        this.mob.getZ(),
++                        this.mob.getBoundingBox().inflate(this.lookDistance, 3.0, this.lookDistance)
+                     );
+                     // Pyzh end - filter nearby entity queries during spatial collection
+                 }

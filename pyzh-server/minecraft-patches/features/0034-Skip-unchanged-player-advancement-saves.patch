@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 1 Nov 2026 01:32:37 +0300
+Subject: [PATCH] Skip unchanged player advancement saves
+
+
+diff --git a/net/minecraft/advancements/AdvancementProgress.java b/net/minecraft/advancements/AdvancementProgress.java
+index 8fa2687b5601008a8491049b6ea8fe9fb3120d0a..ef2d9f55e374daa0ccb408505840051e51493f3a 100644
+--- a/net/minecraft/advancements/AdvancementProgress.java
++++ b/net/minecraft/advancements/AdvancementProgress.java
+@@ -83,6 +83,11 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
+     }
+     // Pyzh end - Cache advancement completion
+ 
++    // Pyzh - Persistence also observes direct CriterionProgress grants, revokes, and requirement updates.
++    public long pyzh$getChangeCount() {
++        return this.pyzh$changes;
++    }
++
+     public boolean isDone() {
+         // Pyzh start - Cache advancement completion
+         final long changes = this.pyzh$changes;
+diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
+index f21c12e081a0adf8b527aa1d31f36f843762cfde..03a2345ad3a31ae0753bf40122e2d14c7c4c5069 100644
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -61,6 +61,12 @@ public class PlayerAdvancements {
+     private @Nullable AdvancementHolder lastSelectedTab;
+     private boolean isFirstPacket = true;
+     private final Codec<PlayerAdvancements.Data> codec;
++    // Pyzh start - Skip unchanged advancement saves independently of client update tracking.
++    private record PyzhSaveVersion(long reload, long changes) {}
++    private long pyzh$reloadGeneration;
++    private @Nullable PyzhSaveVersion pyzh$submittedVersion;
++    private java.util.concurrent.@Nullable CompletableFuture<Void> pyzh$pendingSave;
++    // Pyzh end - Skip unchanged advancement saves
+     // Pyzh - Keyed by the Identifier instances held by player predicates. Cleared on reload, the only time a holder's progress is replaced.
+     private final it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<Identifier, AdvancementProgress> progressByPredicateId = new it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<>();
+     private final Map<CriterionTrigger<?>, Map<PlayerAdvancements.TriggerInstanceKey, ? extends CriterionTriggerInstance>> activeTriggers = new it.unimi.dsi.fastutil.objects.Reference2ReferenceOpenHashMap<>(); // Leaf - Replace criterion map with optimized collection
+@@ -86,6 +92,7 @@ public class PlayerAdvancements {
+     }
+ 
+     public void reload(final ServerAdvancementManager manager) {
++        this.pyzh$reloadGeneration++; // Pyzh - Reload can remove or replace progress even without a criterion change.
+         this.clearTriggers();
+         this.progress.clear();
+         this.progressByPredicateId.clear(); // Pyzh - Cache player predicate progress
+@@ -145,10 +152,27 @@ public class PlayerAdvancements {
+     public void save() {
+         if (org.spigotmc.SpigotConfig.disableAdvancementSaving) return; // Spigot
+         if (org.dreeam.leaf.config.modules.misc.RegionFormatConfig.isReadOnlyMode()) return; // Leaf - Add read-only mode for Linear v2
++        // Pyzh start - Skip JSON encoding when the persisted or pending progress is unchanged.
++        long changes = 0L;
++        for (final AdvancementProgress progress : this.progress.values()) {
++            changes += progress.pyzh$getChangeCount();
++        }
++        final PyzhSaveVersion version = new PyzhSaveVersion(this.pyzh$reloadGeneration, changes);
++        if (version.equals(this.pyzh$submittedVersion) && this.pyzh$pendingSave != null) {
++            if (!this.pyzh$pendingSave.isDone()) return;
++            if (!this.pyzh$pendingSave.isCompletedExceptionally() && Files.isRegularFile(this.playerSavePath)) return;
++        }
++        // Pyzh end - Skip unchanged advancement saves
+         JsonElement json = this.codec.encodeStart(JsonOps.INSTANCE, this.asData()).getOrThrow();
+         // Pyzh start - Write player stats and advancements off the main thread
+         final Path path = this.playerSavePath;
+-        org.dreeam.leaf.async.AsyncPlayerDataSaving.submitJson(path, json, tree -> writeJson(path, tree));
++        // Pyzh - Only successful writes mark a version persisted; failed writes are retried by the next save.
++        this.pyzh$submittedVersion = version;
++        this.pyzh$pendingSave = org.dreeam.leaf.async.AsyncPlayerDataSaving.submitJson(path, json, tree -> writeJson(path, tree)).whenComplete((ignored, failure) -> {
++            if (failure != null) {
++                LOGGER.error("Couldn't save player advancements to {}", path, failure);
++            }
++        });
+     }
+ 
+     private static void writeJson(final Path path, final JsonElement json) {
+@@ -160,7 +184,7 @@ public class PlayerAdvancements {
+                 GSON.toJson(json, GSON.newJsonWriter(outputWriter));
+             }
+         } catch (IOException | JsonIOException e) {
+-            LOGGER.error("Couldn't save player advancements to {}", path, e);
++            throw new java.util.concurrent.CompletionException(e); // Pyzh - Report failure to persistence tracking.
+         }
+     }
+ 

@@ -1,0 +1,21 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 1 Nov 2026 01:32:37 +0300
+Subject: [PATCH] Defer unfinished village paths without blocking
+
+
+diff --git a/net/minecraft/world/entity/ai/goal/MoveThroughVillageGoal.java b/net/minecraft/world/entity/ai/goal/MoveThroughVillageGoal.java
+index edfcfc17684960b97c80fb57bd1708db27352abf..d59518c6ea175ff7279e4971a8830e83913387bd 100644
+--- a/net/minecraft/world/entity/ai/goal/MoveThroughVillageGoal.java
++++ b/net/minecraft/world/entity/ai/goal/MoveThroughVillageGoal.java
+@@ -60,7 +60,9 @@ public class MoveThroughVillageGoal extends Goal {
+ 
+         // Pyzh start - Finish async village paths on a later check
+         if (this.pendingPath != null) {
+-            this.pendingPath.process(); // Usually finished by a worker since the previous check
++            if (!this.pendingPath.isProcessed()) {
++                return false; // Pyzh - Never wait for or run a pending search on the tick thread.
++            }
+             this.path = this.pendingPath;
+             this.pendingPath = null;
+             return this.stopBeforeDoors();

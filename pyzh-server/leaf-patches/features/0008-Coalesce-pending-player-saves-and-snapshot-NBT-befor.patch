@@ -1,0 +1,338 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Sun, 1 Nov 2026 01:32:37 +0300
+Subject: [PATCH] Coalesce pending player saves and snapshot NBT before IO
+
+
+diff --git a/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java b/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java
+index e6ddc286aaf79befb4ecae54ef8147b061a2245d..f7ba51904b0dc9b408fc146deee0496905f937cd 100644
+--- a/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java
++++ b/java/org/dreeam/leaf/async/AsyncPlayerDataSaving.java
+@@ -1,14 +1,12 @@
+ package org.dreeam.leaf.async;
+ 
+ import net.minecraft.util.Util;
++import net.minecraft.nbt.CompoundTag;
++import ru.turbovadim.pyzh.io.CoalescingSaveQueue;
+ import org.apache.logging.log4j.LogManager;
+ import org.apache.logging.log4j.Logger;
+ import org.dreeam.leaf.config.modules.async.AsyncPlayerDataSave;
+ 
+-import java.util.ArrayList;
+-import java.util.Arrays;
+-import java.util.HashMap;
+-import java.util.Map;
+ import java.util.Optional;
+ import java.util.UUID;
+ import java.util.concurrent.CompletableFuture;
+@@ -25,8 +23,9 @@ public final class AsyncPlayerDataSaving {
+ 
+     private static final Logger LOGGER = LogManager.getLogger("Leaf");
+     private static final Object LIFECYCLE_LOCK = new Object();
+-    private static final Map<UUID, PlayerSaveState> PLAYER_SAVES = new HashMap<>();
+-    private static final Map<java.nio.file.Path, JsonFileState> JSON_SAVES = new HashMap<>(); // Pyzh - Write player stats and advancements off the main thread
++    // Pyzh - Bound retained snapshots per key while preserving the newest accepted save for reloads.
++    private static CoalescingSaveQueue<UUID, CompoundTag> playerSaves;
++    private static CoalescingSaveQueue<java.nio.file.Path, com.google.gson.JsonElement> jsonSaves;
+     private static final AtomicInteger PLAYER_THREAD_COUNTER = new AtomicInteger();
+     private static ExecutorService playerIoPool;
+     private static ExecutorService levelIoPool;
+@@ -44,6 +43,8 @@ public final class AsyncPlayerDataSaving {
+ 
+             playerIoPool = createPool(1, runnable -> new Thread(runnable, "Leaf Player IO Thread-" + PLAYER_THREAD_COUNTER.incrementAndGet()));
+             levelIoPool = createPool(1, runnable -> new Thread(runnable, "Leaf Level IO Thread"));
++            playerSaves = new CoalescingSaveQueue<>(playerIoPool); // Pyzh - Coalesce pending snapshots.
++            jsonSaves = new CoalescingSaveQueue<>(playerIoPool);
+             accepting = true;
+         }
+     }
+@@ -65,35 +66,20 @@ public final class AsyncPlayerDataSaving {
+         );
+     }
+ 
+-    public static CompletableFuture<Void> submitPlayer(final UUID uniqueId, final byte[] encodedData, final java.util.function.Consumer<byte[]> writer) {
+-        final byte[] snapshot = Arrays.copyOf(encodedData, encodedData.length);
++    // Pyzh - Snapshot NBT on its owning thread; compression and file replacement run in the writer.
++    public static CompletableFuture<Void> submitPlayer(final UUID uniqueId, final CompoundTag data, final java.util.function.Consumer<CompoundTag> writer) {
++        final CompoundTag snapshot = data.copy();
+         if (!AsyncPlayerDataSave.enabled) {
+             return runSynchronously(() -> writer.accept(snapshot));
+         }
+ 
+-        final CompletableFuture<Void> next;
+         synchronized (LIFECYCLE_LOCK) {
+             if (!accepting || playerIoPool == null) {
+                 return CompletableFuture.failedFuture(new RejectedExecutionException("Player data saving is shutting down"));
+             }
+ 
+-            final PlayerSaveState state = PLAYER_SAVES.computeIfAbsent(uniqueId, ignored -> new PlayerSaveState());
+-            final CompletableFuture<Void> previous = state.tail;
+-            next = (previous == null ? CompletableFuture.<Void>completedFuture(null) : previous.handle((ignored, throwable) -> null))
+-                .thenRunAsync(() -> writer.accept(snapshot), playerIoPool);
+-            state.latestSnapshot = snapshot;
+-            state.tail = next;
++            return playerSaves.submit(uniqueId, snapshot, writer);
+         }
+-
+-        next.whenComplete((ignored, throwable) -> {
+-            synchronized (LIFECYCLE_LOCK) {
+-                final PlayerSaveState state = PLAYER_SAVES.get(uniqueId);
+-                if (state != null && state.tail == next) {
+-                    PLAYER_SAVES.remove(uniqueId);
+-                }
+-            }
+-        });
+-        return next;
+     }
+ 
+     public static CompletableFuture<Void> submitLevel(final Runnable writer) {
+@@ -112,54 +98,41 @@ public final class AsyncPlayerDataSaving {
+     }
+ 
+     // Pyzh start - Write player stats and advancements off the main thread
+-    // Writes a player JSON file (stats, advancements) on the player IO thread, in submission order per path.
++    // Writes a player JSON file on the player IO thread, retaining only the newest pending tree per path.
+     // The tree must be freshly built and not modified afterwards. Until its write finishes, getPendingJson returns a
+     // copy of the newest tree for that path, so loaders never read an older file. Runs synchronously when async saving
+     // is disabled or shutting down.
+     public static CompletableFuture<Void> submitJson(final java.nio.file.Path path, final com.google.gson.JsonElement json, final java.util.function.Consumer<com.google.gson.JsonElement> writer) {
+         final java.nio.file.Path key = path.toAbsolutePath().normalize();
+-        final CompletableFuture<Void> next;
++        final CompletableFuture<Void> previous;
+         synchronized (LIFECYCLE_LOCK) {
+             if (!AsyncPlayerDataSave.enabled || !accepting || playerIoPool == null) {
+-                next = null;
++                previous = jsonSaves == null ? CompletableFuture.completedFuture(null) : jsonSaves.drain(key);
+             } else {
+-                final JsonFileState state = JSON_SAVES.computeIfAbsent(key, ignored -> new JsonFileState());
+-                final CompletableFuture<Void> previous = state.tail;
+-                next = (previous == null ? CompletableFuture.<Void>completedFuture(null) : previous.handle((ignored, throwable) -> null))
+-                    .thenRunAsync(() -> writer.accept(json), playerIoPool);
+-                state.latest = json;
+-                state.tail = next;
++                return jsonSaves.submit(key, json, writer);
+             }
+         }
+-        if (next == null) {
+-            return runSynchronously(() -> writer.accept(json));
+-        }
+-
+-        next.whenComplete((ignored, throwable) -> {
+-            synchronized (LIFECYCLE_LOCK) {
+-                final JsonFileState state = JSON_SAVES.get(key);
+-                if (state != null && state.tail == next) {
+-                    JSON_SAVES.remove(key);
+-                }
+-            }
+-        });
+-        return next;
++        // Shutdown fallback must follow any accepted writes to this path rather than race them.
++        previous.handle((ignored, throwable) -> null).join();
++        return runSynchronously(() -> writer.accept(json));
+     }
+ 
+     public static Optional<com.google.gson.JsonElement> getPendingJson(final java.nio.file.Path path) {
+         final java.nio.file.Path key = path.toAbsolutePath().normalize();
++        final Optional<com.google.gson.JsonElement> snapshot;
+         synchronized (LIFECYCLE_LOCK) {
+-            final JsonFileState state = JSON_SAVES.get(key);
+-            return state == null ? Optional.empty() : Optional.of(state.latest.deepCopy());
++            snapshot = jsonSaves == null ? Optional.empty() : jsonSaves.latest(key);
+         }
++        return snapshot.map(com.google.gson.JsonElement::deepCopy); // Pyzh - Copy immutable snapshots outside the lifecycle lock.
+     }
+     // Pyzh end - Write player stats and advancements off the main thread
+ 
+-    public static Optional<byte[]> getPendingPlayerData(final UUID uniqueId) {
++    public static Optional<CompoundTag> getPendingPlayerData(final UUID uniqueId) {
++        final Optional<CompoundTag> snapshot;
+         synchronized (LIFECYCLE_LOCK) {
+-            final PlayerSaveState state = PLAYER_SAVES.get(uniqueId);
+-            return state == null ? Optional.empty() : Optional.of(Arrays.copyOf(state.latestSnapshot, state.latestSnapshot.length));
++            snapshot = playerSaves == null ? Optional.empty() : playerSaves.latest(uniqueId);
+         }
++        return snapshot.map(CompoundTag::copy); // Pyzh - No serialization or copying under the lifecycle lock.
+     }
+ 
+     public static void shutdownAndAwait() {
+@@ -172,21 +145,7 @@ public final class AsyncPlayerDataSaving {
+             }
+ 
+             accepting = false;
+-            final ArrayList<CompletableFuture<Void>> pending = new ArrayList<>(PLAYER_SAVES.size() + JSON_SAVES.size() + 1);
+-            for (final PlayerSaveState state : PLAYER_SAVES.values()) {
+-                if (state.tail != null) {
+-                    pending.add(state.tail);
+-                }
+-            }
+-            // Pyzh start - Write player stats and advancements off the main thread
+-            for (final JsonFileState state : JSON_SAVES.values()) {
+-                if (state.tail != null) {
+-                    pending.add(state.tail);
+-                }
+-            }
+-            // Pyzh end - Write player stats and advancements off the main thread
+-            pending.add(levelTail);
+-            barrier = CompletableFuture.allOf(pending.toArray(CompletableFuture[]::new));
++            barrier = CompletableFuture.allOf(playerSaves.drain(), jsonSaves.drain(), levelTail); // Pyzh - Include coalesced writes.
+             playerExecutor = playerIoPool;
+             levelExecutor = levelIoPool;
+         }
+@@ -216,11 +175,7 @@ public final class AsyncPlayerDataSaving {
+             } catch (final InterruptedException ex) {
+                 interrupted = true;
+             } catch (final TimeoutException ex) {
+-                final int pendingPlayers;
+-                synchronized (LIFECYCLE_LOCK) {
+-                    pendingPlayers = PLAYER_SAVES.size();
+-                }
+-                LOGGER.warn("Still waiting for asynchronous persistence tasks to finish ({} player keys pending)", pendingPlayers);
++                LOGGER.warn("Still waiting for asynchronous persistence tasks to finish ({} player keys pending)", playerSaves.pendingKeys());
+             } catch (final ExecutionException ex) {
+                 LOGGER.error("An asynchronous persistence task failed during shutdown", ex.getCause() == null ? ex : ex.getCause());
+                 break;
+@@ -246,15 +201,4 @@ public final class AsyncPlayerDataSaving {
+             Thread.currentThread().interrupt();
+         }
+     }
+-
+-    private static final class PlayerSaveState {
+-        private CompletableFuture<Void> tail;
+-        private byte[] latestSnapshot;
+-    }
+-
+-    // Pyzh - Write player stats and advancements off the main thread
+-    private static final class JsonFileState {
+-        private CompletableFuture<Void> tail;
+-        private com.google.gson.JsonElement latest;
+-    }
+ }
+diff --git a/java/ru/turbovadim/pyzh/io/CoalescingSaveQueue.java b/java/ru/turbovadim/pyzh/io/CoalescingSaveQueue.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..118ab74937fc79cacdbf5e7223a915700beb1bea
+--- /dev/null
++++ b/java/ru/turbovadim/pyzh/io/CoalescingSaveQueue.java
+@@ -0,0 +1,123 @@
++package ru.turbovadim.pyzh.io;
++
++import java.util.HashMap;
++import java.util.Map;
++import java.util.Optional;
++import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.Executor;
++import java.util.function.Consumer;
++import org.jspecify.annotations.Nullable;
++
++/**
++ * Keeps one active write and the newest pending snapshot per key. Superseded submissions finish with
++ * the write that replaces them. Snapshots and writers must not mutate data exposed by {@link #latest}.
++ */
++public final class CoalescingSaveQueue<K, V> {
++    private final Executor executor;
++    private final Map<K, State<V>> states = new HashMap<>();
++
++    public CoalescingSaveQueue(final Executor executor) {
++        this.executor = executor;
++    }
++
++    public CompletableFuture<Void> submit(final K key, final V snapshot, final Consumer<V> writer) {
++        final State<V> state;
++        final CompletableFuture<Void> completion;
++        final boolean schedule;
++        synchronized (this) {
++            final State<V> existing = this.states.get(key);
++            schedule = existing == null;
++            if (schedule) {
++                completion = new CompletableFuture<>();
++                state = new State<>(new Save<>(snapshot, writer, completion));
++                this.states.put(key, state);
++            } else {
++                state = existing;
++                completion = state.pending == null ? new CompletableFuture<>() : state.pending.completion;
++                state.pending = new Save<>(snapshot, writer, completion);
++            }
++        }
++        if (schedule) {
++            this.schedule(key, state);
++        }
++        // A caller cancelling its own future must not cancel persistence or the shutdown barrier.
++        return completion.copy();
++    }
++
++    public synchronized Optional<V> latest(final K key) {
++        final State<V> state = this.states.get(key);
++        return state == null ? Optional.empty() : Optional.of((state.pending == null ? state.active : state.pending).snapshot);
++    }
++
++    public synchronized CompletableFuture<Void> drain() {
++        return CompletableFuture.allOf(this.states.values().stream().map(state -> state.drained).toArray(CompletableFuture[]::new));
++    }
++
++    public synchronized CompletableFuture<Void> drain(final K key) {
++        final State<V> state = this.states.get(key);
++        return state == null ? CompletableFuture.completedFuture(null) : state.drained.copy();
++    }
++
++    public synchronized int pendingKeys() {
++        return this.states.size();
++    }
++
++    private void schedule(final K key, final State<V> state) {
++        try {
++            this.executor.execute(() -> this.write(key, state));
++        } catch (final RuntimeException failure) {
++            final Save<V> pending;
++            synchronized (this) {
++                this.states.remove(key, state);
++                pending = state.pending;
++                state.pending = null;
++            }
++            state.active.completion.completeExceptionally(failure);
++            if (pending != null) pending.completion.completeExceptionally(failure);
++            state.drained.completeExceptionally(failure);
++        }
++    }
++
++    private void write(final K key, final State<V> state) {
++        final Save<V> save = state.active;
++        Throwable failure = null;
++        try {
++            save.writer.accept(save.snapshot);
++        } catch (final Throwable throwable) {
++            failure = throwable;
++        }
++
++        final boolean more;
++        synchronized (this) {
++            more = state.pending != null;
++            if (more) {
++                state.active = state.pending;
++                state.pending = null;
++            } else {
++                this.states.remove(key, state);
++            }
++        }
++        if (failure == null) save.completion.complete(null);
++        else save.completion.completeExceptionally(failure);
++
++        if (more) {
++            this.schedule(key, state); // Requeue behind other keys so a busy player cannot monopolize I/O.
++        } else if (failure == null) {
++            state.drained.complete(null);
++        } else {
++            state.drained.completeExceptionally(failure);
++        }
++    }
++
++    private record Save<V>(V snapshot, Consumer<V> writer, CompletableFuture<Void> completion) {}
++
++    private static final class State<V> {
++        private Save<V> active;
++        private @Nullable Save<V> pending;
++        private final CompletableFuture<Void> drained = new CompletableFuture<>();
++
++        private State(final Save<V> active) {
++            this.active = active;
++        }
++    }
++}
