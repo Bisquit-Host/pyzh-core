@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:46:28 +0300
+Subject: [PATCH] Make the lightning countdown explicitly opt-in
+
+Default small-optimizations.lightning-countdown to false so ordinary worlds use Paper lightning trials.
+
+diff --git a/java/org/galemc/gale/configuration/GaleWorldConfiguration.java b/java/org/galemc/gale/configuration/GaleWorldConfiguration.java
+index a5d4119e39a3ae9dd4dbaf45519588f03b24f33a..4d3749148c7f29044c62953d00ed6d87e644361b 100644
+--- a/java/org/galemc/gale/configuration/GaleWorldConfiguration.java
++++ b/java/org/galemc/gale/configuration/GaleWorldConfiguration.java
+@@ -66,6 +66,7 @@ public class GaleWorldConfiguration extends ConfigurationPart {
+         }
+ 
+         public LoadChunks loadChunks;
++        public boolean lightningCountdown = false;
+ 
+         public class LoadChunks extends ConfigurationPart {
+             public boolean toSpawnPhantoms = true; // Gale - MultiPaper - don't load chunks to spawn phantoms

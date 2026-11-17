@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:46:28 +0300
+Subject: [PATCH] Preserve Paper spawning random calls by default
+
+Keep bit-packed sampling behind the existing mob spawning optimization. Use the original nextFloat and nextInt calls otherwise, including the rare zero-size group.
+
+diff --git a/net/minecraft/world/level/NaturalSpawner.java b/net/minecraft/world/level/NaturalSpawner.java
+index 9a8b8bc11ef166e47ecad6ed19aeb0bfdf4be6a8..a316541ac56cdbee591aed44b85ff38dc66582c3 100644
+--- a/net/minecraft/world/level/NaturalSpawner.java
++++ b/net/minecraft/world/level/NaturalSpawner.java
+@@ -351,8 +351,8 @@ public final class NaturalSpawner {
+             BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+             //int clusterSize = 0; // Paper PR - throttle failed spawn attempts - move up
+ 
+-            // 3 * (2 + 3 * [1, 4] * 4)
+-            long rand = level.random.nextLong();
++            final boolean optimizeRandom = org.dreeam.leaf.config.modules.opt.OptimizeMobSpawning.enabled;
++            long rand = optimizeRandom ? level.random.nextLong() : 0L;
+             int bits = 0;
+             for (int groupCount = 0; groupCount < 3; groupCount++) {
+                 int x = posX;
+@@ -360,39 +360,46 @@ public final class NaturalSpawner {
+                 //int ss = 6;
+                 MobSpawnSettings.SpawnerData currentSpawnData = null;
+                 SpawnGroupData groupData = null;
+-                //int max = Mth.ceil(level.random.nextFloat() * 4.0F);
+-                int max = (int) (((rand >>> bits) & 0x3L) + 1);
+-                bits += 2;
+-                if (bits >= 62) {
+-                    rand = level.random.nextLong();
+-                    bits = 0;
++                int max;
++                if (optimizeRandom) {
++                    max = (int) (((rand >>> bits) & 0x3L) + 1);
++                    bits += 2;
++                    if (bits >= 62) {
++                        rand = level.random.nextLong();
++                        bits = 0;
++                    }
++                } else {
++                    max = Mth.ceil(level.random.nextFloat() * 4.0F);
+                 }
+                 int groupSize = 0;
+ 
+                 for (int ll = 0; ll < max; ll++) {
+-                    int rand1 = 0, rand2 = 0, rand3 = 0, rand4 = 0, valuesNeeded = 4;
+-                    while (valuesNeeded > 0) {
+-                        // [0, 61] 3 remains
+-                        int threeBits = (int) ((rand >>> bits) & 0x7L);
+-                        bits += 3;
+-                        if (threeBits != 7 && threeBits != 6) {
+-                            switch (valuesNeeded) {
+-                                case 1 -> rand4 = threeBits;
+-                                case 2 -> rand3 = threeBits;
+-                                case 3 -> rand2 = threeBits;
+-                                default -> rand1 = threeBits;
++                    if (optimizeRandom) {
++                        int rand1 = 0, rand2 = 0, rand3 = 0, rand4 = 0, valuesNeeded = 4;
++                        while (valuesNeeded > 0) {
++                            // [0, 61] 3 remains
++                            int threeBits = (int) ((rand >>> bits) & 0x7L);
++                            bits += 3;
++                            if (threeBits != 7 && threeBits != 6) {
++                                switch (valuesNeeded) {
++                                    case 1 -> rand4 = threeBits;
++                                    case 2 -> rand3 = threeBits;
++                                    case 3 -> rand2 = threeBits;
++                                    default -> rand1 = threeBits;
++                                }
++                                valuesNeeded--;
++                            }
++                            if (bits >= 62) {
++                                rand = level.random.nextLong();
++                                bits = 0;
+                             }
+-                            valuesNeeded--;
+-                        }
+-                        if (bits >= 62) {
+-                            rand = level.random.nextLong();
+-                            bits = 0;
+                         }
++                        x += rand1 - rand2;
++                        z += rand3 - rand4;
++                    } else {
++                        x += level.random.nextInt(6) - level.random.nextInt(6);
++                        z += level.random.nextInt(6) - level.random.nextInt(6);
+                     }
+-                    x += rand1 - rand2;
+-                    z += rand3 - rand4;
+-                    // x += level.random.nextInt(6) - level.random.nextInt(6);
+-                    // z += level.random.nextInt(6) - level.random.nextInt(6);
+                     // Leaf end - optimize mob spawning
+                     pos.set(x, yStart, z);
+                     double xx = x + 0.5;
