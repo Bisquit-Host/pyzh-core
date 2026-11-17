@@ -11,13 +11,11 @@ config-version: '3.0'
 #  ASYNC  #
 ###########
 async:
-  # Whether or not asynchronous mob spawning should be enabled.
-  # On servers with many entities, this can improve performance by up to 15%. You must have
-  # paper's per-player-mob-spawns setting set to true for this to work.
-  # One quick note - this does not actually spawn mobs async (that would be very unsafe).
-  # This just offloads some expensive calculations that are required for mob spawning.
+  # Offload mob count aggregation using a snapshot captured on the world tick thread.
+  # Requires Paper's per-player-mob-spawns setting. Counts come from an earlier tick,
+  # and spawning waits while aggregation is unfinished. Disabled by default for Paper timing.
   async-mob-spawning:
-    enabled: true
+    enabled: false
   async-pathfinding:
     enabled: false
     max-threads: 0
@@ -112,8 +110,8 @@ performance:
     # Use legacy random source for slime chunk generation,
     # to follow vanilla behavior.
     use-legacy-random-for-slime-chunk: false
-  # May cause the inconsistent order of future compose tasks.
-  faster-structure-gen-future-sequencing: true
+  # Use an alternative structure generation future collector. Results retain input order.
+  faster-structure-gen-future-sequencing: false
   # Experimental feature.
   # Reuse BlockPos to reduce memory allocation slightly and improve performance on random ticking.
   # May conflict with certain plugins or operations. Disable if position issues occur.
@@ -129,13 +127,15 @@ performance:
     # May be incompatible with some datapacks that modify End world generation.
     enabled: false
   optimize-entity-activation: false
+  inside-brownian-walk:
+    use-entity-random: false
   # Whether to only tick / update items in main hand and offhand instead of the entire inventory.
   only-tick-items-in-hand: false
   optimize-mob-spawning: false
   optimize-no-action-time:
     disable-light-check: false
-  # Whether to optimize player movement processing by skipping unnecessary edge checks and avoiding redundant view distance updates.
-  optimize-player-movement: true
+  # Whether to skip server-side sneak edge checks and avoid redundant view distance updates.
+  optimize-player-movement: false
   optimize-random-tick: false
   optimize-waypoint: false
   # Whether to use optimized powered rails.
@@ -149,7 +149,7 @@ performance:
     # Skip selecting inactive entities when using execute command.
     # Will improve performance on servers with massive datapack functions.
     skip-inactive-entity-for-execute-command: false
-  skip-map-item-data-updates-if-map-does-not-have-craftmaprenderer: true
+  skip-map-item-data-updates-if-map-does-not-have-craftmaprenderer: false
   sleeping-block-entity: false
   # Skip mob spawning for chunks with repeated failures at least `min-failed`.
   # Valid range for `spawn-chance` is 0.0 to 100.0.
@@ -194,6 +194,18 @@ performance:
 fixes:
   # Fixes for vanilla Minecraft bugs.
   vanilla-bug-fix:
+    # Preserve health above maximum health when loading entities.
+    mc-17876: false
+    # Count the full crafted stack in crafting statistics, including shift-click results.
+    mc-65198: false
+    # Dismount baby villagers from chickens after curing.
+    mc-200418: false
+    # Use copper sounds for raw copper blocks.
+    mc-223153: false
+    # Clear combat tracker state when removing living entities.
+    mc-298464: false
+    # Stop turtles with NoGravity from swimming vertically outside water.
+    mc-299642: false
     # Whether to fix incorrect granting of 'Who needs rockets?' advancement.
     # Mojira link: https://mojira.dev/MC-270656
     mc-270656: false
@@ -211,6 +223,9 @@ fixes:
     enabled: false
     # Prevents projectiles from moving into weak loaded chunks.
     projectiles: false
+  projectile-consumption:
+    # Defer bow ammo consumption and retain crossbow charges when shooting events are cancelled or do not consume items.
+    enabled: false
 
 ##############
 #  GAMEPLAY  #
@@ -344,7 +359,7 @@ misc:
     # '*' works as a wildcard, e.g. 'hub*' matches hub01 and hub02, '*hub*' matches every world
     # whose name contains 'hub'. Entries without '*' are matched exactly.
     worlds: []
-  including-5s-in-get-tps: true
+  including-5s-in-get-tps: false
   # Linear is a region format that uses zstd compression instead of zlib.
   # This format saves about 50% of disk space.
   # Read Leaf docs before using!
@@ -365,6 +380,8 @@ misc:
   secure-seed:
     enabled: false
   sentry:
+    # Allow SENTRY_DSN to override the configured DSN.
+    allow-environment-dsn: false
     # Sentry DSN for improved error logging, leave blank to disable,
     # Obtain from https://sentry.io/
     dsn: ''

@@ -42,4 +42,4 @@ misc:
 small-optimizations:
   reduced-intervals:
     increase-time-statistics: 1
-    update-entity-line-of-sight: 4
+    update-entity-line-of-sight: 1
