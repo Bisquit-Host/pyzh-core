@@ -1,0 +1,5 @@
+name: PyzhPerfHarness
+version: 1
+main: pyzh.harness.HarnessPlugin
+api-version: '1.21'
+load: POSTWORLD
