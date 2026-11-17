@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 17 Nov 2026 18:15:53 +0300
+Subject: [PATCH] Read blocks outside loaded chunks in path regions without an
+ EmptyLevelChunk
+
+Return void air and empty fluid directly for absent chunks, retaining the
+build-height guards and the discarded chunk constructor's simpleRandom draw.
+Loaded reads and collision/block-entity access retain their original paths.
+
+Measured jointly with the following search-table change, six runs per jar:
+mob-farm 2.264 to 1.985 mspt, -12.34% with a 95% half-width of 5.31 percentage
+points; allocation 1998.841 to 1503.839 KB/tick, -24.76% +/-8.78 points.
+Villager allocation falls 5.95% +/-1.30 points; timing is unresolved.
+The two contributions were not measured separately.
+
+diff --git a/net/minecraft/world/level/PathNavigationRegion.java b/net/minecraft/world/level/PathNavigationRegion.java
+index 24e82cff2bc2908852bcd4f1367b54690a65e2da..05c32888b92de80a40b844fb26863751c30f0b8b 100644
+--- a/net/minecraft/world/level/PathNavigationRegion.java
++++ b/net/minecraft/world/level/PathNavigationRegion.java
+@@ -129,8 +129,12 @@ public class PathNavigationRegion implements CollisionGetter {
+             return Blocks.AIR.defaultBlockState();
+         }
+ 
+-        ChunkAccess chunk = this.getChunk(pos);
+-        return chunk.getBlockState(pos);
++        ChunkAccess chunk = this.getChunkIfLoaded(pos.getX() >> 4, pos.getZ() >> 4);
++        if (chunk != null) {
++            return chunk.getBlockState(pos);
++        }
++        this.level.simpleRandom.nextInt(100000); // Preserve the discarded EmptyLevelChunk's lightning initialization.
++        return Blocks.VOID_AIR.defaultBlockState();
+     }
+ 
+     @Override
+@@ -139,8 +143,12 @@ public class PathNavigationRegion implements CollisionGetter {
+             return Fluids.EMPTY.defaultFluidState();
+         }
+ 
+-        ChunkAccess chunk = this.getChunk(pos);
+-        return chunk.getFluidState(pos);
++        ChunkAccess chunk = this.getChunkIfLoaded(pos.getX() >> 4, pos.getZ() >> 4);
++        if (chunk != null) {
++            return chunk.getFluidState(pos);
++        }
++        this.level.simpleRandom.nextInt(100000); // Preserve the discarded EmptyLevelChunk's lightning initialization.
++        return Fluids.EMPTY.defaultFluidState();
+     }
+ 
+     @Override

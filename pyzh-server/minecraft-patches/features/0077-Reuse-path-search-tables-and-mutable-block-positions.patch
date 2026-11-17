@@ -1,0 +1,650 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 17 Nov 2026 18:15:53 +0300
+Subject: [PATCH] Reuse path search tables and mutable block positions
+
+Lease a flat table until evaluator completion, including the main-to-worker
+handoff for Leaf async paths. Synchronize free-list ownership transfers and
+bound retention to 16 tables of at most 65536 cells. Clear node references
+before pooling so unused cells cannot retain older cameFrom chains.
+Keep Node.createHash identity, including collisions, and allocate fresh
+nodes so returned paths remain unchanged when a table is reused.
+
+Cache floor heights only for loaded, static shapes in synchronous searches;
+async invalidation disables even preparation-time entries. Reuse block
+positions and swim neighbor storage, and reconstruct paths by appending and
+reversing. Preserve live step-height reads, EnumSet evaluator overrides, all
+neighbor/cache reads and their order, heap operations and float arithmetic.
+
+Ten focused tests pass. Differential validation covers 3258 randomized
+searches, 17971709 trace entries, paths/reached flags, both RNG streams,
+hazards/tags, hash collisions and concurrent/async searches.
+
+Measured jointly with the preceding region change, six runs per jar:
+mob-farm 2.264 to 1.985 mspt, -12.34% with a 95% half-width of 5.31 percentage
+points; allocation 1998.841 to 1503.839 KB/tick, -24.76% +/-8.78 points.
+Villager allocation falls from 638.146 to 600.151 KB/tick, -5.95% +/-1.30
+points; its -2.05% timing change is inside the +/-2.30-point bound.
+
+diff --git a/net/minecraft/world/level/pathfinder/AmphibiousNodeEvaluator.java b/net/minecraft/world/level/pathfinder/AmphibiousNodeEvaluator.java
+index 745cc35d9591003908a0c571ffecbe2506adbd82..4d0665d646554f610b642d758f40975448b6010a 100644
+--- a/net/minecraft/world/level/pathfinder/AmphibiousNodeEvaluator.java
++++ b/net/minecraft/world/level/pathfinder/AmphibiousNodeEvaluator.java
+@@ -61,7 +61,7 @@ public class AmphibiousNodeEvaluator extends WalkNodeEvaluator {
+             jumpSize = 0;
+         }
+ 
+-        double posHeight = this.getFloorLevel(new BlockPos(pos.x, pos.y, pos.z));
++        double posHeight = this.getFloorLevel(pos.x, pos.y, pos.z);
+         Node upNode = this.findAcceptedNode(pos.x, pos.y + 1, pos.z, Math.max(0, jumpSize - 1), posHeight, Direction.UP, blockPathTypeCurrent);
+         Node downNode = this.findAcceptedNode(pos.x, pos.y - 1, pos.z, jumpSize, posHeight, Direction.DOWN, blockPathTypeCurrent);
+         if (this.isVerticalNeighborValid(upNode, pos)) {
+@@ -95,11 +95,8 @@ public class AmphibiousNodeEvaluator extends WalkNodeEvaluator {
+     public PathType getPathType(final PathfindingContext context, final int x, final int y, final int z) {
+         PathType blockPathType = context.getPathTypeFromState(x, y, z);
+         if (blockPathType == PathType.WATER) {
+-            BlockPos.MutableBlockPos reusablePos = new BlockPos.MutableBlockPos();
+-
+             for (Direction direction : Direction.VALUES) { // Leaf - paw optimization - cache direction values
+-                reusablePos.set(x, y, z).move(direction);
+-                PathType pathType = context.getPathTypeFromState(reusablePos.getX(), reusablePos.getY(), reusablePos.getZ());
++                PathType pathType = context.getPathTypeFromState(x + direction.getStepX(), y + direction.getStepY(), z + direction.getStepZ());
+                 if (pathType == PathType.BLOCKED) {
+                     return PathType.WATER_BORDER;
+                 }
+diff --git a/net/minecraft/world/level/pathfinder/FlyNodeEvaluator.java b/net/minecraft/world/level/pathfinder/FlyNodeEvaluator.java
+index 95985269148e290fed45dd55f5472db9ca8a000b..7d4ba4f59237c81639c338637823a06810fbe9ed 100644
+--- a/net/minecraft/world/level/pathfinder/FlyNodeEvaluator.java
++++ b/net/minecraft/world/level/pathfinder/FlyNodeEvaluator.java
+@@ -1,7 +1,5 @@
+ package net.minecraft.world.level.pathfinder;
+ 
+-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+ import java.util.List;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.util.Mth;
+@@ -13,7 +11,6 @@ import net.minecraft.world.phys.AABB;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class FlyNodeEvaluator extends WalkNodeEvaluator {
+-    private final Long2ObjectMap<PathType> pathTypeByPosCache = new Long2ObjectOpenHashMap<>();
+     private static final float SMALL_MOB_SIZE = 1.0F;
+     private static final float SMALL_MOB_INFLATED_START_NODE_BOUNDING_BOX = 1.1F;
+     private static final int MAX_START_NODE_CANDIDATES = 10;
+@@ -21,14 +18,12 @@ public class FlyNodeEvaluator extends WalkNodeEvaluator {
+     @Override
+     public void prepare(final PathNavigationRegion level, final Mob entity) {
+         super.prepare(level, entity);
+-        this.pathTypeByPosCache.clear();
+         entity.onPathfindingStart();
+     }
+ 
+     @Override
+     public void done() {
+         this.mob.onPathfindingDone();
+-        this.pathTypeByPosCache.clear();
+         super.done();
+     }
+ 
+@@ -280,17 +275,11 @@ public class FlyNodeEvaluator extends WalkNodeEvaluator {
+         return best;
+     }
+ 
+-    @Override
+-    protected PathType getCachedPathType(final int x, final int y, final int z) {
+-        return this.pathTypeByPosCache.computeIfAbsent(BlockPos.asLong(x, y, z), key -> this.getPathTypeOfMob(this.currentContext, x, y, z, this.mob));
+-    }
+-
+     @Override
+     public PathType getPathType(final PathfindingContext context, final int x, final int y, final int z) {
+         PathType blockPathType = context.getPathTypeFromState(x, y, z);
+         if (blockPathType == PathType.OPEN && y >= context.level().getMinY() + 1) {
+-            BlockPos belowPos = new BlockPos(x, y - 1, z);
+-            PathType belowType = context.getPathTypeFromState(belowPos.getX(), belowPos.getY(), belowPos.getZ());
++            PathType belowType = context.getPathTypeFromState(x, y - 1, z);
+             if (belowType == PathType.FIRE || belowType == PathType.LAVA) {
+                 blockPathType = PathType.FIRE;
+             } else if (belowType == PathType.DAMAGING) {
+@@ -298,7 +287,8 @@ public class FlyNodeEvaluator extends WalkNodeEvaluator {
+             } else if (belowType == PathType.COCOA) {
+                 blockPathType = PathType.COCOA;
+             } else if (belowType == PathType.FENCE) {
+-                if (!belowPos.equals(context.mobPosition())) {
++                BlockPos mobPosition = context.mobPosition();
++                if (x != mobPosition.getX() || y - 1 != mobPosition.getY() || z != mobPosition.getZ()) {
+                     blockPathType = PathType.FENCE;
+                 }
+             } else {
+diff --git a/net/minecraft/world/level/pathfinder/NodeEvaluator.java b/net/minecraft/world/level/pathfinder/NodeEvaluator.java
+index 12db6ea0d9ac6fbf764ad7bf3120d7c35c4b3a86..6e2a9b53ada2c7d459f7027f779b2b6bd7d0d1fd 100644
+--- a/net/minecraft/world/level/pathfinder/NodeEvaluator.java
++++ b/net/minecraft/world/level/pathfinder/NodeEvaluator.java
+@@ -1,7 +1,5 @@
+ package net.minecraft.world.level.pathfinder;
+ 
+-import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.tags.BlockTags;
+ import net.minecraft.util.Mth;
+@@ -14,7 +12,7 @@ import net.minecraft.world.level.block.state.BlockState;
+ public abstract class NodeEvaluator {
+     protected PathfindingContext currentContext;
+     protected Mob mob;
+-    protected final Int2ObjectMap<Node> nodes = new Int2ObjectOpenHashMap<>();
++    PathSearchScratch scratch;
+     protected int entityWidth;
+     protected int entityHeight;
+     protected int entityDepth;
+@@ -26,7 +24,11 @@ public abstract class NodeEvaluator {
+     public void prepare(final PathNavigationRegion level, final Mob entity) {
+         this.currentContext = new PathfindingContext(level, entity);
+         this.mob = entity;
+-        this.nodes.clear();
++        if (this.scratch == null) {
++            this.scratch = PathSearchScratch.acquire();
++        }
++
++        this.scratch.reset();
+         this.entityWidth = Mth.floor(entity.getBbWidth() + 1.0F);
+         this.entityHeight = Mth.floor(entity.getBbHeight() + 1.0F);
+         this.entityDepth = Mth.floor(entity.getBbWidth() + 1.0F);
+@@ -35,6 +37,10 @@ public abstract class NodeEvaluator {
+     public void done() {
+         this.currentContext = null;
+         this.mob = null;
++        if (this.scratch != null) {
++            this.scratch.release();
++            this.scratch = null;
++        }
+     }
+ 
+     // Kaiiju start - petal - async path processing
+@@ -43,9 +49,6 @@ public abstract class NodeEvaluator {
+             this.currentContext.cache = null;
+         }
+     }
+-    public void clearNodes() {
+-        this.nodes.clear();
+-    }
+     // Kaiiju end - petal - async path processing
+ 
+     protected Node getNode(final BlockPos pos) {
+@@ -53,7 +56,7 @@ public abstract class NodeEvaluator {
+     }
+ 
+     protected Node getNode(final int x, final int y, final int z) {
+-        return this.nodes.computeIfAbsent(Node.createHash(x, y, z), k -> new Node(x, y, z));
++        return this.scratch.node(this.scratch.cell(x, y, z), x, y, z);
+     }
+ 
+     public abstract Node getStart();
+diff --git a/net/minecraft/world/level/pathfinder/PathFinder.java b/net/minecraft/world/level/pathfinder/PathFinder.java
+index 8497dbbac2cb63370d40892ae8a526e68d922586..1b334dfd81908a8852d53f3fc7491881d087d332 100644
+--- a/net/minecraft/world/level/pathfinder/PathFinder.java
++++ b/net/minecraft/world/level/pathfinder/PathFinder.java
+@@ -100,7 +100,6 @@ public class PathFinder {
+                 return new net.minecraft.world.level.pathfinder.Path(List.of(), entity.blockPosition(), false);
+             } finally {
+                 nodeEvaluator.done();
+-                nodeEvaluator.clearNodes();
+                 org.dreeam.leaf.async.path.NodeEvaluatorCache.returnNodeEvaluator(nodeEvaluator);
+             }
+         });
+@@ -225,14 +224,12 @@ public class PathFinder {
+ 
+     private Path reconstructPath(final Node closest, final BlockPos target, final boolean reached) {
+         List<Node> nodes = Lists.newArrayList();
+-        Node node = closest;
+-        nodes.add(0, node);
+ 
+-        while (node.cameFrom != null) {
+-            node = node.cameFrom;
+-            nodes.add(0, node);
++        for (Node node = closest; node != null; node = node.cameFrom) {
++            nodes.add(node);
+         }
+ 
++        java.util.Collections.reverse(nodes);
+         return new Path(nodes, target, reached);
+     }
+ }
+diff --git a/net/minecraft/world/level/pathfinder/PathSearchScratch.java b/net/minecraft/world/level/pathfinder/PathSearchScratch.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..439e2c0839102da790856ee750484e3458fb3a35
+--- /dev/null
++++ b/net/minecraft/world/level/pathfinder/PathSearchScratch.java
+@@ -0,0 +1,137 @@
++package net.minecraft.world.level.pathfinder;
++
++import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
++import java.util.ArrayDeque;
++import java.util.Arrays;
++import net.minecraft.core.BlockPos;
++import org.jspecify.annotations.Nullable;
++
++/**
++ * Lookup tables of one path search, leased by a NodeEvaluator from prepare() to done() so that searches reuse the
++ * same hot memory instead of every mob keeping its own maps.
++ * A cell holds what the search asks about a block position again and again: the path type of the mob standing there,
++ * the floor level and the node. Nodes stay keyed by Node.createHash, which several positions can share.
++ * A cell index is valid until the next call to cell().
++ */
++final class PathSearchScratch {
++    private static final int INITIAL_CAPACITY = 1024;
++    private static final int MAX_POOLED = 16;
++    private static final int MAX_RETAINED_CAPACITY = 65536;
++    private static final long HASH_MULTIPLIER = 0x9E3779B97F4A7C15L;
++    private static final ArrayDeque<PathSearchScratch> POOL = new ArrayDeque<>();
++
++    private long[] keys = new long[INITIAL_CAPACITY];
++    private int[] stamps = new int[INITIAL_CAPACITY];
++    @Nullable PathType[] types = new PathType[INITIAL_CAPACITY];
++    double[] floors = new double[INITIAL_CAPACITY];
++    private @Nullable Node[] nodes = new Node[INITIAL_CAPACITY];
++    private final Int2ObjectOpenHashMap<Node> nodesByHash = new Int2ObjectOpenHashMap<>();
++    private int shift = 64 - Integer.numberOfTrailingZeros(INITIAL_CAPACITY);
++    private int stamp;
++    private int size;
++
++    static PathSearchScratch acquire() {
++        PathSearchScratch scratch;
++        synchronized (POOL) {
++            scratch = POOL.pollFirst();
++        }
++
++        return scratch != null ? scratch : new PathSearchScratch();
++    }
++
++    void release() {
++        // Unused cells can otherwise retain entire cameFrom chains across searches.
++        Arrays.fill(this.nodes, null);
++        this.nodesByHash.clear();
++        synchronized (POOL) {
++            if (this.keys.length <= MAX_RETAINED_CAPACITY && POOL.size() < MAX_POOLED) {
++                POOL.addFirst(this);
++            }
++        }
++    }
++
++    void reset() {
++        if (++this.stamp == 0) {
++            Arrays.fill(this.stamps, 0);
++            this.stamp = 1;
++        }
++
++        this.size = 0;
++        this.nodesByHash.clear();
++    }
++
++    int cell(final int x, final int y, final int z) {
++        long key = BlockPos.asLong(x, y, z);
++        int mask = this.keys.length - 1;
++        int index = (int)(key * HASH_MULTIPLIER >>> this.shift);
++
++        while (this.stamps[index] == this.stamp) {
++            if (this.keys[index] == key) {
++                return index;
++            }
++
++            index = index + 1 & mask;
++        }
++
++        if (this.size * 2 >= this.keys.length) {
++            this.grow();
++            return this.cell(x, y, z);
++        }
++
++        this.size++;
++        this.stamps[index] = this.stamp;
++        this.keys[index] = key;
++        this.types[index] = null;
++        this.floors[index] = Double.NaN;
++        this.nodes[index] = null;
++        return index;
++    }
++
++    Node node(final int cell, final int x, final int y, final int z) {
++        Node node = this.nodes[cell];
++        if (node == null) {
++            int hash = Node.createHash(x, y, z);
++            node = this.nodesByHash.get(hash);
++            if (node == null) {
++                node = new Node(x, y, z);
++                this.nodesByHash.put(hash, node);
++            }
++
++            this.nodes[cell] = node;
++        }
++
++        return node;
++    }
++
++    private void grow() {
++        long[] oldKeys = this.keys;
++        int[] oldStamps = this.stamps;
++        PathType[] oldTypes = this.types;
++        double[] oldFloors = this.floors;
++        Node[] oldNodes = this.nodes;
++        int capacity = oldKeys.length << 1;
++        int mask = capacity - 1;
++        this.keys = new long[capacity];
++        this.stamps = new int[capacity];
++        this.types = new PathType[capacity];
++        this.floors = new double[capacity];
++        this.nodes = new Node[capacity];
++        this.shift--;
++
++        for (int old = 0; old < oldKeys.length; old++) {
++            if (oldStamps[old] == this.stamp) {
++                int index = (int)(oldKeys[old] * HASH_MULTIPLIER >>> this.shift);
++
++                while (this.stamps[index] == this.stamp) {
++                    index = index + 1 & mask;
++                }
++
++                this.stamps[index] = this.stamp;
++                this.keys[index] = oldKeys[old];
++                this.types[index] = oldTypes[old];
++                this.floors[index] = oldFloors[old];
++                this.nodes[index] = oldNodes[old];
++            }
++        }
++    }
++}
+diff --git a/net/minecraft/world/level/pathfinder/SwimNodeEvaluator.java b/net/minecraft/world/level/pathfinder/SwimNodeEvaluator.java
+index a4fa389670f3f4ac6df5d2d95aa148843fb7630d..c893b101e395b68d1d14baba282636b527a4e5c6 100644
+--- a/net/minecraft/world/level/pathfinder/SwimNodeEvaluator.java
++++ b/net/minecraft/world/level/pathfinder/SwimNodeEvaluator.java
+@@ -1,39 +1,23 @@
+ package net.minecraft.world.level.pathfinder;
+ 
+-import com.google.common.collect.Maps;
+-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+-import java.util.Map;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Direction;
+ import net.minecraft.tags.FluidTags;
+ import net.minecraft.util.Mth;
+ import net.minecraft.world.entity.Mob;
+-import net.minecraft.world.level.PathNavigationRegion;
+ import net.minecraft.world.level.block.state.BlockState;
+ import net.minecraft.world.level.material.FluidState;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class SwimNodeEvaluator extends NodeEvaluator {
+     public final boolean allowBreaching;
+-    private final Long2ObjectMap<PathType> pathTypesByPosCache = new Long2ObjectOpenHashMap<>();
++    private final Node[] reusableNeighbors = new Node[Direction.VALUES.length];
++    private final BlockPos.MutableBlockPos fluidPos = new BlockPos.MutableBlockPos();
+ 
+     public SwimNodeEvaluator(final boolean allowBreaching) {
+         this.allowBreaching = allowBreaching;
+     }
+ 
+-    @Override
+-    public void prepare(final PathNavigationRegion level, final Mob entity) {
+-        super.prepare(level, entity);
+-        this.pathTypesByPosCache.clear();
+-    }
+-
+-    @Override
+-    public void done() {
+-        super.done();
+-        this.pathTypesByPosCache.clear();
+-    }
+-
+     @Override
+     public Node getStart() {
+         return this.getNode(
+@@ -49,11 +33,11 @@ public class SwimNodeEvaluator extends NodeEvaluator {
+     @Override
+     public int getNeighbors(final Node[] neighbors, final Node pos) {
+         int count = 0;
+-        Map<Direction, Node> nodes = Maps.newEnumMap(Direction.class);
++        Node[] nodes = this.reusableNeighbors;
+ 
+         for (Direction direction : Direction.VALUES) { // Leaf - paw optimization - cache direction values
+             Node node = this.findAcceptedNode(pos.x + direction.getStepX(), pos.y + direction.getStepY(), pos.z + direction.getStepZ());
+-            nodes.put(direction, node);
++            nodes[direction.ordinal()] = node;
+             if (this.isNodeValid(node)) {
+                 neighbors[count++] = node;
+             }
+@@ -61,7 +45,7 @@ public class SwimNodeEvaluator extends NodeEvaluator {
+ 
+         for (Direction direction : Direction.Plane.HORIZONTAL.faces) { // Pluto - Expose Direction$Plane's faces
+             Direction secondDirection = direction.getClockWise();
+-            if (hasMalus(nodes.get(direction)) && hasMalus(nodes.get(secondDirection))) {
++            if (hasMalus(nodes[direction.ordinal()]) && hasMalus(nodes[secondDirection.ordinal()])) {
+                 Node diagonalNode = this.findAcceptedNode(
+                     pos.x + direction.getStepX() + secondDirection.getStepX(), pos.y, pos.z + direction.getStepZ() + secondDirection.getStepZ()
+                 );
+@@ -91,7 +75,7 @@ public class SwimNodeEvaluator extends NodeEvaluator {
+                 best = this.getNode(x, y, z);
+                 best.type = pathType;
+                 best.costMalus = Math.max(best.costMalus, pathCost);
+-                if (this.currentContext.level().getFluidState(new BlockPos(x, y, z)).isEmpty()) {
++                if (this.currentContext.level().getFluidState(this.fluidPos.set(x, y, z)).isEmpty()) {
+                     best.costMalus += 8.0F;
+                 }
+             }
+@@ -101,7 +85,14 @@ public class SwimNodeEvaluator extends NodeEvaluator {
+     }
+ 
+     protected PathType getCachedBlockType(final int x, final int y, final int z) {
+-        return this.pathTypesByPosCache.computeIfAbsent(BlockPos.asLong(x, y, z), k -> this.getPathType(this.currentContext, x, y, z));
++        PathSearchScratch scratch = this.scratch;
++        int cell = scratch.cell(x, y, z);
++        PathType pathType = scratch.types[cell];
++        if (pathType == null) {
++            pathType = scratch.types[cell] = this.getPathType(this.currentContext, x, y, z);
++        }
++
++        return pathType;
+     }
+ 
+     @Override
+diff --git a/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java b/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
+index 3f6b46856ef20e380750e77b7a9366b8c5decc3a..ec3308dda65d743bd53f8100a7688e9263741cca 100644
+--- a/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
++++ b/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
+@@ -1,7 +1,5 @@
+ package net.minecraft.world.level.pathfinder;
+ 
+-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+ import it.unimi.dsi.fastutil.objects.Object2BooleanMap;
+ import it.unimi.dsi.fastutil.objects.Object2BooleanOpenHashMap;
+ import java.util.EnumSet;
+@@ -31,22 +29,29 @@ import org.jspecify.annotations.Nullable;
+ public class WalkNodeEvaluator extends NodeEvaluator {
+     public static final double SPACE_BETWEEN_WALL_POSTS = 0.5;
+     private static final double DEFAULT_MOB_JUMP_HEIGHT = 1.125;
+-    private final Long2ObjectMap<PathType> pathTypesByPosCacheByMob = new Long2ObjectOpenHashMap<>();
+     private final Object2BooleanMap<AABB> collisionCache = new Object2BooleanOpenHashMap<>();
+     private final Node[] reusableNeighbors = new Node[Direction.Plane.HORIZONTAL.length()];
++    private final BlockPos.MutableBlockPos floorPos = new BlockPos.MutableBlockPos();
+     private int maxFallDistance; // Kaiiju - petal - async path processing - snapshot on main thread
++    private boolean cacheFloorLevels;
+ 
+     @Override
+     public void prepare(final PathNavigationRegion level, final Mob entity) {
+         super.prepare(level, entity);
+         entity.onPathfindingStart();
+         this.maxFallDistance = entity.getMaxFallDistance(); // Kaiiju - petal - async path processing - snapshot on main thread
++        this.cacheFloorLevels = true;
++    }
++
++    @Override
++    public void invalidateCache() {
++        super.invalidateCache();
++        this.cacheFloorLevels = false;
+     }
+ 
+     @Override
+     public void done() {
+         this.mob.onPathfindingDone();
+-        this.pathTypesByPosCacheByMob.clear();
+         this.collisionCache.clear();
+         super.done();
+     }
+@@ -129,7 +134,7 @@ public class WalkNodeEvaluator extends NodeEvaluator {
+             jumpSize = Mth.floor(Math.max(1.0F, this.mob.maxUpStep()));
+         }
+ 
+-        double posHeight = this.getFloorLevel(new BlockPos(pos.x, pos.y, pos.z));
++        double posHeight = this.getFloorLevel(pos.x, pos.y, pos.z);
+ 
+         for (Direction direction : Direction.Plane.HORIZONTAL.faces) { // Pluto - Expose Direction$Plane's faces
+             Node node = this.findAcceptedNode(
+@@ -209,9 +214,44 @@ public class WalkNodeEvaluator extends NodeEvaluator {
+         return true;
+     }
+ 
+-    protected double getFloorLevel(final BlockPos pos) {
++    protected double getFloorLevel(final int x, final int y, final int z) {
++        return this.getFloorLevel(this.scratch.cell(x, y, z), x, y, z);
++    }
++
++    private double getFloorLevel(final int cell, final int x, final int y, final int z) {
++        if (!this.cacheFloorLevels) {
++            return this.computeFloorLevel(x, y, z);
++        }
++
++        PathSearchScratch scratch = this.scratch;
++        double floorLevel = scratch.floors[cell];
++        if (Double.isNaN(floorLevel)) {
++            floorLevel = this.computeFloorLevel(x, y, z);
++            if (this.canCacheFloorLevel(x, y, z)) {
++                scratch.floors[cell] = floorLevel;
++            }
++        }
++
++        return floorLevel;
++    }
++
++    private boolean canCacheFloorLevel(final int x, final int y, final int z) {
++        BlockGetter level = this.currentContext.level();
++        BlockState below = level.getBlockStateIfLoaded(this.floorPos.set(x, y - 1, z));
++        return below != null && !below.getBlock().hasDynamicShape()
++            && (!(this.canFloat() || this.isAmphibious()) || level.getFluidIfLoaded(this.floorPos.set(x, y, z)) != null);
++    }
++
++    private double computeFloorLevel(final int x, final int y, final int z) {
+         BlockGetter level = this.currentContext.level();
+-        return (this.canFloat() || this.isAmphibious()) && level.getFluidState(pos).is(FluidTags.WATER) ? pos.getY() + 0.5 : getFloorLevel(level, pos);
++        BlockPos.MutableBlockPos pos = this.floorPos.set(x, y, z);
++        if ((this.canFloat() || this.isAmphibious()) && level.getFluidState(pos).is(FluidTags.WATER)) {
++            return y + 0.5;
++        }
++
++        pos.setY(y - 1);
++        VoxelShape shape = level.getBlockState(pos).getCollisionShape(level, pos);
++        return y - 1 + (shape.isEmpty() ? 0.0 : shape.max(Direction.Axis.Y));
+     }
+ 
+     public static double getFloorLevel(final BlockGetter level, final BlockPos pos) {
+@@ -234,16 +274,24 @@ public class WalkNodeEvaluator extends NodeEvaluator {
+         final PathType blockPathTypeCurrent
+     ) {
+         Node best = null;
+-        BlockPos.MutableBlockPos reusablePos = new BlockPos.MutableBlockPos();
+-        double maxYTarget = this.getFloorLevel(reusablePos.set(x, y, z));
++        PathSearchScratch scratch = this.scratch;
++        int cell = scratch.cell(x, y, z);
++        double maxYTarget = this.getFloorLevel(cell, x, y, z);
++
+         if (maxYTarget - nodeHeight > this.getMobJumpHeight()) {
+             return null;
+         }
+ 
+-        PathType pathType = this.getCachedPathType(x, y, z);
++        PathType pathType = scratch.types[cell];
++        if (pathType == null) {
++            pathType = scratch.types[cell] = this.getPathTypeOfMob(this.currentContext, x, y, z, this.mob);
++        }
++
+         float pathCost = this.mob.getPathfindingMalus(pathType);
+         if (pathCost >= 0.0F) {
+-            best = this.getNodeAndUpdateCostToMax(x, y, z, pathType, pathCost);
++            best = scratch.node(cell, x, y, z);
++            best.type = pathType;
++            best.costMalus = Math.max(best.costMalus, pathCost);
+         }
+ 
+         if (doesBlockHavePartialCollision(blockPathTypeCurrent) && best != null && best.costMalus >= 0.0F && !this.canReachWithoutCollision(best)) {
+@@ -257,7 +305,7 @@ public class WalkNodeEvaluator extends NodeEvaluator {
+                 && (this.mob.level().purpurConfig.mobsIgnoreRails || pathType != PathType.UNPASSABLE_RAIL) // Purpur - Config to allow mobs to pathfind over rails
+                 && pathType != PathType.TRAPDOOR
+                 && pathType != PathType.POWDER_SNOW) {
+-                best = this.tryJumpOn(x, y, z, jumpSize, nodeHeight, travelDirection, blockPathTypeCurrent, reusablePos);
++                best = this.tryJumpOn(x, y, z, jumpSize, nodeHeight, travelDirection, blockPathTypeCurrent);
+             } else if (!this.isAmphibious() && pathType == PathType.WATER && !this.canFloat()) {
+                 best = this.tryFindFirstNonWaterBelow(x, y, z, best);
+             } else if (pathType == PathType.OPEN) {
+@@ -305,8 +353,7 @@ public class WalkNodeEvaluator extends NodeEvaluator {
+         final int jumpSize,
+         final double nodeHeight,
+         final Direction travelDirection,
+-        final PathType blockPathTypeCurrent,
+-        final BlockPos.MutableBlockPos reusablePos
++        final PathType blockPathTypeCurrent
+     ) {
+         Node nodeAbove = this.findAcceptedNode(x, y + 1, z, jumpSize - 1, nodeHeight, travelDirection, blockPathTypeCurrent);
+         if (nodeAbove == null) {
+@@ -326,10 +373,10 @@ public class WalkNodeEvaluator extends NodeEvaluator {
+         double halfWidth = this.mob.getBbWidth() / 2.0;
+         AABB grow = new AABB(
+             centerX - halfWidth,
+-            this.getFloorLevel(reusablePos.set(centerX, y + 1, centerZ)) + 0.001,
++            this.getFloorLevel(x - travelDirection.getStepX(), y + 1, z - travelDirection.getStepZ()) + 0.001,
+             centerZ - halfWidth,
+             centerX + halfWidth,
+-            this.mob.getBbHeight() + this.getFloorLevel(reusablePos.set((double)nodeAbove.x, (double)nodeAbove.y, (double)nodeAbove.z)) - 0.002,
++            this.mob.getBbHeight() + this.getFloorLevel(nodeAbove.x, nodeAbove.y, nodeAbove.z) - 0.002,
+             centerZ + halfWidth
+         );
+         return this.hasCollisions(grow) ? null : nodeAbove;
+@@ -376,7 +423,14 @@ public class WalkNodeEvaluator extends NodeEvaluator {
+     }
+ 
+     protected PathType getCachedPathType(final int x, final int y, final int z) {
+-        return this.pathTypesByPosCacheByMob.computeIfAbsent(BlockPos.asLong(x, y, z), k -> this.getPathTypeOfMob(this.currentContext, x, y, z, this.mob));
++        PathSearchScratch scratch = this.scratch;
++        int cell = scratch.cell(x, y, z);
++        PathType pathType = scratch.types[cell];
++        if (pathType == null) {
++            pathType = scratch.types[cell] = this.getPathTypeOfMob(this.currentContext, x, y, z, this.mob);
++        }
++
++        return pathType;
+     }
+ 
+     @Override
+@@ -458,17 +512,18 @@ public class WalkNodeEvaluator extends NodeEvaluator {
+ 
+     @Override
+     public PathType getPathType(final PathfindingContext context, final int x, final int y, final int z) {
+-        return getPathTypeStatic(context, new BlockPos.MutableBlockPos(x, y, z));
++        return getPathTypeStatic(context, x, y, z);
+     }
+ 
+     public static PathType getPathTypeStatic(final Mob mob, final BlockPos pos) {
+-        return getPathTypeStatic(new PathfindingContext(mob.level(), mob), pos.mutable());
++        return getPathTypeStatic(new PathfindingContext(mob.level(), mob), pos.getX(), pos.getY(), pos.getZ());
+     }
+ 
+     public static PathType getPathTypeStatic(final PathfindingContext context, final BlockPos.MutableBlockPos pos) {
+-        int x = pos.getX();
+-        int y = pos.getY();
+-        int z = pos.getZ();
++        return getPathTypeStatic(context, pos.getX(), pos.getY(), pos.getZ());
++    }
++
++    private static PathType getPathTypeStatic(final PathfindingContext context, final int x, final int y, final int z) {
+         PathType blockPathType = context.getPathTypeFromState(x, y, z);
+         if (blockPathType == PathType.OPEN && y >= context.level().getMinY() + 1) {
+             return switch (context.getPathTypeFromState(x, y - 1, z)) {
