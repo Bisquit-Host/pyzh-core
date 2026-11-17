@@ -1,0 +1,240 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 17 Nov 2026 07:48:28 +0300
+Subject: [PATCH] Reuse block states within redstone wire evaluations
+
+Carry the above and horizontal states from block-signal scans into incoming
+wire scans using invocation-local references. Evaluate each incoming
+conductor once. Share the path with experimental and Eigencraft evaluation
+without allocating a cache or changing wire-suppression scope. The block
+scan suppresses wire signals through the same flag getBlockSignal uses
+(world tick thread field, ThreadLocal fallback or serial field) and
+restores its previous value afterwards, also on exceptions.
+
+Require the own chunk and every reachable neighbor chunk to be FULL through
+the non-loading immediate accessor used by subsequent world reads. Direct
+signals reach Manhattan distance two; only local 0/15 corners reach a
+diagonal chunk. Signal getters and conductor predicates cannot write states
+or call plugins without loading a chunk. If any required chunk is missing,
+retain every original read and predicate, including synchronous load order.
+Keep the original two-argument incoming scan and remove the unused
+dispatcher. Leave neighbor-update iteration and position hashing intact.
+
+Eight interleaved redstone pairs vs the previous third-patch followup.jar:
+2.654 to 2.549 ms/tick, -3.97% +/-3.96 percentage points at 95%, not resolved
+at 99%. Allocation +0.07% +/-0.27 points. Exact state CRC remains 4217535585.
+JFR Level.getBlockState inclusive share falls from 32.3% to 30.6%.
+Focused differential/event tests in RedstoneReadTest cover the
+suppression flag on every thread kind and all 256 local positions with
+every required chunk loaded and each required chunk absent in turn, with
+simulated load-callback writes.
+
+diff --git a/net/minecraft/world/level/block/RedStoneWireBlock.java b/net/minecraft/world/level/block/RedStoneWireBlock.java
+index 7e8f821aa0c5847c7213a7d2cbc9c0b1c638fac6..0be7524ee8936942cb9265e7040ffcb5706f1f34 100644
+--- a/net/minecraft/world/level/block/RedStoneWireBlock.java
++++ b/net/minecraft/world/level/block/RedStoneWireBlock.java
+@@ -389,6 +389,62 @@ public class RedStoneWireBlock extends Block {
+         return this.shouldSignalTL.get();
+     }
+ 
++    private boolean setShouldSignal(final boolean signal) {
++        final boolean previous;
++        if (!org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
++            previous = this.shouldSignal;
++            this.shouldSignal = signal;
++        } else if (Thread.currentThread() instanceof ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread tickThread) {
++            previous = tickThread.redstoneWireShouldSignal;
++            tickThread.redstoneWireShouldSignal = signal;
++        } else {
++            previous = this.shouldSignalTL.get();
++            this.shouldSignalTL.set(signal);
++        }
++        return previous;
++    }
++
++    // All chunks in the scan must already be FULL. Keep this scan in sync with SignalGetter.getBestNeighborSignal/getSignal.
++    public int getBlockAndWireSignal(
++        final Level level, final BlockPos pos, final RedstoneWireEvaluator evaluator, final boolean skipWireAtMax
++    ) {
++        BlockState above = null;
++        BlockState north = null;
++        BlockState south = null;
++        BlockState west = null;
++        BlockState east = null;
++        int blockSignal = 0;
++        final boolean previousSignal = this.setShouldSignal(false);
++        try {
++            BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
++            for (Direction direction : net.minecraft.world.level.SignalGetter.DIRECTIONS) {
++                neighborPos.setWithOffset(pos, direction);
++                BlockState neighborState = level.getBlockState(neighborPos);
++                switch (direction) {
++                    case UP -> above = neighborState;
++                    case NORTH -> north = neighborState;
++                    case SOUTH -> south = neighborState;
++                    case WEST -> west = neighborState;
++                    case EAST -> east = neighborState;
++                }
++                int signal = neighborState.getSignal(level, neighborPos, direction);
++                if (neighborState.isRedstoneConductor(level, neighborPos)) {
++                    signal = Math.max(signal, level.getDirectSignalTo(neighborPos));
++                }
++                blockSignal = Math.max(blockSignal, signal);
++                if (blockSignal >= Redstone.SIGNAL_MAX) {
++                    blockSignal = Redstone.SIGNAL_MAX;
++                    break;
++                }
++            }
++        } finally {
++            this.setShouldSignal(previousSignal);
++        }
++        int wireSignal = skipWireAtMax && blockSignal == Redstone.SIGNAL_MAX ? 0
++            : evaluator.getIncomingWireSignal(level, pos, above, north, south, west, east);
++        return blockSignal << 4 | wireSignal;
++    }
++
+     private void checkCornerChangeAt(final Level level, final BlockPos pos) {
+         if (level.getBlockState(pos).is(this)) {
+             level.updateNeighborsAt(pos, this);
+diff --git a/net/minecraft/world/level/redstone/DefaultRedstoneWireEvaluator.java b/net/minecraft/world/level/redstone/DefaultRedstoneWireEvaluator.java
+index 0845733a9c61ffc46bbd0e95d778022e2228f536..a327e1984e1a6120be88c4c8bc626a2a1a0efa31 100644
+--- a/net/minecraft/world/level/redstone/DefaultRedstoneWireEvaluator.java
++++ b/net/minecraft/world/level/redstone/DefaultRedstoneWireEvaluator.java
+@@ -45,7 +45,7 @@ public class DefaultRedstoneWireEvaluator extends RedstoneWireEvaluator {
+     }
+ 
+     public int calculateTargetStrength(final Level level, final BlockPos pos) { // Paper - Optimize redstone
+-        int blockSignal = this.getBlockSignal(level, pos);
+-        return blockSignal == Redstone.SIGNAL_MAX ? blockSignal : Math.max(blockSignal, this.getIncomingWireSignal(level, pos));
++        int signals = this.getBlockAndWireSignal(level, pos, true);
++        return Math.max(signals >> 4, signals & 15);
+     }
+ }
+diff --git a/net/minecraft/world/level/redstone/ExperimentalRedstoneWireEvaluator.java b/net/minecraft/world/level/redstone/ExperimentalRedstoneWireEvaluator.java
+index 9f6d743509147917ba13034435a1a1fcb8001c96..13a6c30ba859bbd6213b5508b96be2ddc333eb83 100644
+--- a/net/minecraft/world/level/redstone/ExperimentalRedstoneWireEvaluator.java
++++ b/net/minecraft/world/level/redstone/ExperimentalRedstoneWireEvaluator.java
+@@ -125,8 +125,9 @@ public class ExperimentalRedstoneWireEvaluator extends RedstoneWireEvaluator {
+             int packed = this.updatedWires.getInt(pos);
+             Orientation orientation = unpackOrientation(packed);
+             int oldPower = unpackPower(packed);
+-            int blockPower = this.getBlockSignal(level, pos);
+-            int wirePower = this.getIncomingWireSignal(level, pos);
++            int signals = this.getBlockAndWireSignal(level, pos, false);
++            int blockPower = signals >> 4;
++            int wirePower = signals & 15;
+             int newPower = Math.max(blockPower, wirePower);
+             int powerToSet;
+             if (newPower < oldPower) {
+@@ -150,8 +151,9 @@ public class ExperimentalRedstoneWireEvaluator extends RedstoneWireEvaluator {
+             BlockPos pos = this.wiresToTurnOn.removeFirst();
+             int packed = this.updatedWires.getInt(pos);
+             int oldPower = unpackPower(packed);
+-            int blockPower = this.getBlockSignal(level, pos);
+-            int wirePower = this.getIncomingWireSignal(level, pos);
++            int signals = this.getBlockAndWireSignal(level, pos, false);
++            int blockPower = signals >> 4;
++            int wirePower = signals & 15;
+             int newPower = Math.max(blockPower, wirePower);
+             Orientation orientation = unpackOrientation(packed);
+             if (newPower > oldPower) {
+diff --git a/net/minecraft/world/level/redstone/RedstoneWireEvaluator.java b/net/minecraft/world/level/redstone/RedstoneWireEvaluator.java
+index 826fb530c4eb486ebc509c4ece7e35ca2636a568..df005a2eb1e06739b1cff8fbd1f19dd9816cf6de 100644
+--- a/net/minecraft/world/level/redstone/RedstoneWireEvaluator.java
++++ b/net/minecraft/world/level/redstone/RedstoneWireEvaluator.java
+@@ -2,6 +2,7 @@ package net.minecraft.world.level.redstone;
+ 
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Direction;
++import net.minecraft.server.level.ServerChunkCache;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.block.RedStoneWireBlock;
+ import net.minecraft.world.level.block.state.BlockState;
+@@ -22,10 +23,87 @@ public abstract class RedstoneWireEvaluator {
+         return this.wireBlock.getBlockSignal(level, pos);
+     }
+ 
++    // Experimental turn-off logic needs both powers. Low nibble: wire power; high nibble: block power.
++    protected int getBlockAndWireSignal(final Level level, final BlockPos pos, final boolean skipWireAtMax) {
++        if (areSignalChunksLoaded(level, pos)) {
++            return this.wireBlock.getBlockAndWireSignal(level, pos, this, skipWireAtMax);
++        }
++        int blockSignal = this.getBlockSignal(level, pos);
++        int wireSignal = skipWireAtMax && blockSignal == Redstone.SIGNAL_MAX ? 0 : this.getIncomingWireSignal(level, pos);
++        return blockSignal << 4 | wireSignal;
++    }
++
++    // Direct signals reach Manhattan distance two. Only a chunk load can run plugin writes during these reads.
++    private static boolean areSignalChunksLoaded(final Level level, final BlockPos pos) {
++        if (!(level.getChunkSource() instanceof ServerChunkCache chunks)) {
++            return false;
++        }
++        int chunkX = pos.getX() >> 4;
++        int chunkZ = pos.getZ() >> 4;
++        if (chunks.getChunkAtIfLoadedImmediately(chunkX, chunkZ) == null) {
++            return false;
++        }
++        int x = pos.getX() & 15;
++        int z = pos.getZ() & 15;
++        int neighborX = (pos.getX() + (x < 2 ? -2 : 2)) >> 4;
++        int neighborZ = (pos.getZ() + (z < 2 ? -2 : 2)) >> 4;
++        if (neighborX != chunkX && chunks.getChunkAtIfLoadedImmediately(neighborX, chunkZ) == null) {
++            return false;
++        }
++        if (neighborZ != chunkZ && chunks.getChunkAtIfLoadedImmediately(chunkX, neighborZ) == null) {
++            return false;
++        }
++        return !((x == 0 || x == 15) && (z == 0 || z == 15))
++            || chunks.getChunkAtIfLoadedImmediately(neighborX, neighborZ) != null;
++    }
++
+     protected int getWireSignal(final BlockPos pos, final BlockState state) {
+         return state.is(this.wireBlock) ? state.getValue(RedStoneWireBlock.POWER) : 0;
+     }
+ 
++    public int getIncomingWireSignal(
++        final Level level, final BlockPos pos, @Nullable BlockState aboveState,
++        final @Nullable BlockState northState, final @Nullable BlockState southState,
++        final @Nullable BlockState westState, final @Nullable BlockState eastState
++    ) {
++        int wireSignal = 0;
++        BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
++        BlockPos.MutableBlockPos verticalNeighborPos = new BlockPos.MutableBlockPos();
++        BlockPos abovePos = pos.above();
++        int aboveConductor = -1;
++        for (Direction direction : Direction.Plane.HORIZONTAL.faces) {
++            neighborPos.setWithOffset(pos, direction);
++            BlockState neighborState = switch (direction) {
++                case NORTH -> northState;
++                case SOUTH -> southState;
++                case WEST -> westState;
++                case EAST -> eastState;
++                default -> throw new IllegalStateException();
++            };
++            if (neighborState == null) {
++                neighborState = level.getBlockState(neighborPos);
++            }
++            wireSignal = Math.max(wireSignal, this.getWireSignal(neighborPos, neighborState));
++            boolean conductor = neighborState.isRedstoneConductor(level, neighborPos);
++            if (conductor) {
++                if (aboveState == null) {
++                    aboveState = level.getBlockState(abovePos);
++                }
++                if (aboveConductor == -1) {
++                    aboveConductor = aboveState.isRedstoneConductor(level, abovePos) ? 1 : 0;
++                }
++                if (aboveConductor == 0) {
++                    verticalNeighborPos.setWithOffset(neighborPos, Direction.UP);
++                    wireSignal = Math.max(wireSignal, this.getWireSignal(verticalNeighborPos, level.getBlockState(verticalNeighborPos)));
++                }
++            } else {
++                verticalNeighborPos.setWithOffset(neighborPos, Direction.DOWN);
++                wireSignal = Math.max(wireSignal, this.getWireSignal(verticalNeighborPos, level.getBlockState(verticalNeighborPos)));
++            }
++        }
++        return Math.max(0, wireSignal - 1);
++    }
++
+     protected int getIncomingWireSignal(final Level level, final BlockPos pos) {
+         int wireSignal = 0;
+         BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
