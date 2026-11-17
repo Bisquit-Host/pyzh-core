@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:45:11 +0300
+Subject: [PATCH] Restore Paper horse attributes and mob defaults
+
+Use spawn-time Paper horse generators by default. Retain configured ranges
+behind the horse-family opt-in and warn once about ignored custom ranges.
+Default squid immunity off and check the entity type before its config.
+Classify stonecutters like Paper unless the pathfinding world's damage is
+positive, reading the setting once per pathfinding context.
+
+diff --git a/io/papermc/paper/entity/activation/ActivationRange.java b/io/papermc/paper/entity/activation/ActivationRange.java
+index 1bb7d1297e44728b493d2303cf695aacc0027e82..70fb98aa7d67421feae0eb82dc60904f56736090 100644
+--- a/io/papermc/paper/entity/activation/ActivationRange.java
++++ b/io/papermc/paper/entity/activation/ActivationRange.java
+@@ -337,7 +337,7 @@ public final class ActivationRange {
+      * @return
+      */
+     public static boolean checkIfActive(final Entity entity) {
+-        if (entity.level().purpurConfig.squidImmuneToEAR && entity instanceof net.minecraft.world.entity.animal.squid.Squid) return true; // Purpur - Squid EAR immunity
++        if (entity instanceof net.minecraft.world.entity.animal.squid.Squid && entity.level().purpurConfig.squidImmuneToEAR) return true; // Purpur - Squid EAR immunity
+         // Never safe to skip fireworks or item gravity
+         if (entity instanceof FireworkRocketEntity || (entity instanceof ItemEntity && (entity.tickCount + entity.getId()) % 4 == 0)) { // Needed for item gravity, see ItemEntity tick
+             return true;
+diff --git a/net/minecraft/world/entity/animal/equine/AbstractHorse.java b/net/minecraft/world/entity/animal/equine/AbstractHorse.java
+index 184bad2c334f04ad7b3e77ea836578c3d54082bc..ebcffa9a0953488a1e7f1876e47c4e14b5887006 100644
+--- a/net/minecraft/world/entity/animal/equine/AbstractHorse.java
++++ b/net/minecraft/world/entity/animal/equine/AbstractHorse.java
+@@ -143,6 +143,7 @@ public abstract class AbstractHorse extends Animal implements PlayerRideableJump
+     // Purpur start - Configurable entity base attributes
+     @Override
+     public void initAttributes() {
++        if (!this.level().purpurConfig.configuredHorseAttributes) return;
+         this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(this.generateMaxHealth(random));
+         this.getAttribute(Attributes.MOVEMENT_SPEED).setBaseValue(this.generateSpeed(random));
+         this.getAttribute(Attributes.JUMP_STRENGTH).setBaseValue(this.generateJumpStrength(random));
+@@ -1098,7 +1099,9 @@ public abstract class AbstractHorse extends Animal implements PlayerRideableJump
+             groupData = new AgeableMob.AgeableMobGroupData(0.2F);
+         }
+ 
+-        //this.randomizeAttributes(level.getRandom()); // Purpur - replaced by initAttributes()
++        if (!this.level().purpurConfig.configuredHorseAttributes) {
++            this.randomizeAttributes(level.getRandom());
++        }
+         return super.finalizeSpawn(level, difficulty, spawnReason, groupData);
+     }
+ 
+diff --git a/net/minecraft/world/level/pathfinder/PathfindingContext.java b/net/minecraft/world/level/pathfinder/PathfindingContext.java
+index 864681a98d963575acb0d88c710e68f249578d32..1a7b8f723c0386400faec9d04c9a516047b79597 100644
+--- a/net/minecraft/world/level/pathfinder/PathfindingContext.java
++++ b/net/minecraft/world/level/pathfinder/PathfindingContext.java
+@@ -11,6 +11,7 @@ public class PathfindingContext {
+     private final CollisionGetter level;
+     public @Nullable PathTypeCache cache; // Kaiiju - petal - async path processing - private -> public-f
+     private final BlockPos mobPosition;
++    private final boolean stonecutterDamaging;
+     private final BlockPos.MutableBlockPos mutablePos = new BlockPos.MutableBlockPos();
+ 
+     public PathfindingContext(final CollisionGetter level, final Mob mob) {
+@@ -22,11 +23,20 @@ public class PathfindingContext {
+         }
+ 
+         this.mobPosition = mob.blockPosition();
++        this.stonecutterDamaging = mob.level().purpurConfig.stonecutterDamage > 0.0F;
+     }
+ 
+     public PathType getPathTypeFromState(final int x, final int y, final int z) {
+         BlockPos pos = this.mutablePos.set(x, y, z);
+-        return this.cache == null ? WalkNodeEvaluator.leaf$pathType(this.level, pos) : this.cache.getOrCompute(this.level, pos); // Leaf - Cache block state tags
++        PathType type = this.cache == null ? WalkNodeEvaluator.leaf$pathType(this.level, pos) : this.cache.getOrCompute(this.level, pos); // Leaf - Cache block state tags
++        // Trapdoor tags precede stonecutter damage in Leaf; open and water states cannot be stonecutters.
++        if (this.stonecutterDamaging && type != PathType.OPEN && type != PathType.WATER && type != PathType.TRAPDOOR) {
++            BlockState state = this.level.getBlockStateIfLoaded(pos);
++            if (state != null && state.is(net.minecraft.world.level.block.Blocks.STONECUTTER)) {
++                return PathType.DAMAGING;
++            }
++        }
++        return type;
+     }
+ 
+     public BlockState getBlockState(final BlockPos pos) {
+diff --git a/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java b/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
+index 32eb719fe2a8e9c18c7db49344446c02ca067723..3f6b46856ef20e380750e77b7a9366b8c5decc3a 100644
+--- a/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
++++ b/net/minecraft/world/level/pathfinder/WalkNodeEvaluator.java
+@@ -551,7 +551,7 @@ public class WalkNodeEvaluator extends NodeEvaluator {
+             return PathType.POWDER_SNOW;
+         }
+ 
+-        if (blockState.is(Blocks.CACTUS) || blockState.is(Blocks.SWEET_BERRY_BUSH) || blockState.is(Blocks.STONECUTTER)) { // Purpur - Stonecutter damage
++        if (blockState.is(Blocks.CACTUS) || blockState.is(Blocks.SWEET_BERRY_BUSH)) {
+             return PathType.DAMAGING;
+         }
+ 
+diff --git a/org/purpurmc/purpur/PurpurWorldConfig.java b/org/purpurmc/purpur/PurpurWorldConfig.java
+index 25d3fdedc08c5f5c02727b70e0efda5167f8ff29..092b2dbca10e4a59cb8890b2da00d8b1bed62ac0 100644
+--- a/org/purpurmc/purpur/PurpurWorldConfig.java
++++ b/org/purpurmc/purpur/PurpurWorldConfig.java
+@@ -42,6 +42,7 @@ public class PurpurWorldConfig {
+     private final String legacyWorldName;
+     private final String worldName;
+     private final World.Environment environment;
++    private boolean warnedAboutHorseAttributes;
+ 
+     public PurpurWorldConfig(String legacyWorldName, World.Environment environment, Key worldKey) {
+         this.legacyWorldName = legacyWorldName;
+@@ -61,6 +62,35 @@ public class PurpurWorldConfig {
+         }
+         log("-------- World Settings For [" + worldName + "] --------");
+         PurpurConfig.readConfig(PurpurWorldConfig.class, this);
++        warnAboutHorseAttributes(configuredHorseAttributes);
++    }
++
++    private void warnAboutHorseAttributes(boolean configured) {
++        if (!configured && !warnedAboutHorseAttributes && (
++            hasCustomHorseRanges("horse", 15, 30, 0.4, 1.0, 0.1125, 0.3375)
++                || hasCustomHorseRanges("donkey", 15, 30, 0.5, 0.5, 0.175, 0.175)
++                || hasCustomHorseRanges("mule", 15, 30, 0.5, 0.5, 0.175, 0.175)
++                || hasCustomHorseRanges("llama", 15, 30, 0.5, 0.5, 0.175, 0.175)
++                || hasCustomHorseRanges("trader_llama", 15, 30, 0.5, 0.5, 0.175, 0.175)
++                || hasCustomHorseRanges("camel", 32, 32, 0.42, 0.42, 0.09, 0.09)
++                || hasCustomHorseRanges("camel_husk", 32, 32, 0.42, 0.42, 0.09, 0.09)
++                || hasCustomHorseRanges("skeleton_horse", 15, 15, 0.4, 1.0, 0.2, 0.2)
++                || hasCustomHorseRanges("zombie_horse", 15, 15, 0.4, 1.0, 0.2, 0.2))) {
++            warnedAboutHorseAttributes = true;
++            Bukkit.getLogger().warning("World " + worldName + " has custom horse-family attribute ranges. "
++                + "Set mobs.horse-family.configured-attributes to true in purpur.yml to use them; "
++                + "new horses currently use Paper attributes.");
++        }
++    }
++
++    private boolean hasCustomHorseRanges(String mob, double healthMin, double healthMax, double jumpMin, double jumpMax, double speedMin, double speedMax) {
++        String path = "mobs." + mob + ".attributes.";
++        return getDouble(path + "max_health.min", healthMin) != healthMin
++            || getDouble(path + "max_health.max", healthMax) != healthMax
++            || getDouble(path + "jump_strength.min", jumpMin) != jumpMin
++            || getDouble(path + "jump_strength.max", jumpMax) != jumpMax
++            || getDouble(path + "movement_speed.min", speedMin) != speedMin
++            || getDouble(path + "movement_speed.max", speedMax) != speedMax;
+     }
+ 
+     private void set(String path, Object val) {
+@@ -2380,6 +2410,7 @@ public class PurpurWorldConfig {
+         hoglinBreedingMaxOffspring = getInt("mobs.hoglin.breeding.offspring.max", hoglinBreedingMaxOffspring);
+     }
+ 
++    public boolean configuredHorseAttributes = false;
+     public boolean horseRidableInWater = false;
+     public double horseMaxHealthMin = 15.0D;
+     public double horseMaxHealthMax = 30.0D;
+@@ -2394,6 +2425,7 @@ public class PurpurWorldConfig {
+     public int horseBreedingMinOffspring = 1;
+     public int horseBreedingMaxOffspring = 1;
+     private void horseSettings() {
++        configuredHorseAttributes = getBoolean("mobs.horse-family.configured-attributes", false);
+         horseRidableInWater = getBoolean("mobs.horse.ridable-in-water", horseRidableInWater);
+         if (PurpurConfig.version < 10) {
+             double oldMin = getDouble("mobs.horse.attributes.max-health.min", horseMaxHealthMin);
+@@ -3509,7 +3541,7 @@ public class PurpurWorldConfig {
+     public boolean squidControllable = true;
+     public double squidMaxHealth = 10.0D;
+     public double squidScale = 1.0D;
+-    public boolean squidImmuneToEAR = true;
++    public boolean squidImmuneToEAR = false;
+     public double squidOffsetWaterCheck = 0.0D;
+     public boolean squidsCanFly = false;
+     public boolean squidTakeDamageFromWater = false;

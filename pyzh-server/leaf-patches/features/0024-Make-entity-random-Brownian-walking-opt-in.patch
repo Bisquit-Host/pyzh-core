@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:45:30 +0300
+Subject: [PATCH] Make entity random Brownian walking opt in
+
+Default to the Paper independent shuffle source. Read the optional entity RNG flag once during configuration loading for the Minecraft behavior.
+
+diff --git a/java/org/dreeam/leaf/config/modules/opt/OptimizeInsideBrownianWalk.java b/java/org/dreeam/leaf/config/modules/opt/OptimizeInsideBrownianWalk.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..035d956d27dddc1e7ac352e059ce79fdb99c6de6
+--- /dev/null
++++ b/java/org/dreeam/leaf/config/modules/opt/OptimizeInsideBrownianWalk.java
+@@ -0,0 +1,17 @@
++package org.dreeam.leaf.config.modules.opt;
++
++import org.dreeam.leaf.config.ConfigCategory;
++import org.dreeam.leaf.config.ConfigModule;
++
++public class OptimizeInsideBrownianWalk extends ConfigModule {
++    public static boolean useEntityRandom = false;
++
++    public String basePath() {
++        return ConfigCategory.PERF.basePath() + ".inside-brownian-walk";
++    }
++
++    @Override
++    public void onLoaded() {
++        useEntityRandom = globalConfig.getBoolean(basePath() + ".use-entity-random", useEntityRandom);
++    }
++}

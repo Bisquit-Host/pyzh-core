@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:45:12 +0300
+Subject: [PATCH] Restore the Paper Brownian walk random source
+
+Use Collections.shuffle and Paper block encounter order by default. Keep the entity RNG shuffle behind the explicit Leaf configuration option.
+
+diff --git a/net/minecraft/world/entity/ai/behavior/InsideBrownianWalk.java b/net/minecraft/world/entity/ai/behavior/InsideBrownianWalk.java
+index 04c5afb2805ec1b5b382432cafccbc6d45be6fb1..48fa8b978baf6e9952a83fc7eaa42210630ff160 100644
+--- a/net/minecraft/world/entity/ai/behavior/InsideBrownianWalk.java
++++ b/net/minecraft/world/entity/ai/behavior/InsideBrownianWalk.java
+@@ -1,9 +1,8 @@
+ package net.minecraft.world.entity.ai.behavior;
+ 
++import java.util.Arrays;
+ import java.util.Collections;
+-import java.util.List;
+ import net.minecraft.core.BlockPos;
+-import net.minecraft.util.Util;
+ import net.minecraft.world.entity.PathfinderMob;
+ import net.minecraft.world.entity.ai.behavior.declarative.BehaviorBuilder;
+ import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+@@ -22,17 +21,21 @@ public class InsideBrownianWalk {
+ 
+                         BlockPos bodyPos = body.blockPosition();
+                         // Leaf start - rewrite InsideBrownianWalk
+-                        BlockPos[] poses = org.dreeam.leaf.util.BlockAreaUtils.getBlocksBetween(
+-                            bodyPos.offset(-1, -1, -1),
+-                            bodyPos.offset(1, 1, 1)
+-                        );
++                        boolean useEntityRandom = org.dreeam.leaf.config.modules.opt.OptimizeInsideBrownianWalk.useEntityRandom;
++                        BlockPos[] poses = useEntityRandom
++                            ? org.dreeam.leaf.util.BlockAreaUtils.getBlocksBetween(bodyPos.offset(-1, -1, -1), bodyPos.offset(1, 1, 1))
++                            : BlockPos.betweenClosedStream(bodyPos.offset(-1, -1, -1), bodyPos.offset(1, 1, 1))
++                                .map(BlockPos::immutable).toArray(BlockPos[]::new);
+ 
+-                        // Fisher-Yates shuffle is faster for this case
+-                        for (int index = poses.length - 1; index > 0; index--) {
+-                            int j = body.getRandom().nextInt(index + 1);
+-                            BlockPos temp = poses[index];
+-                            poses[index] = poses[j];
+-                            poses[j] = temp;
++                        if (useEntityRandom) {
++                            for (int index = poses.length - 1; index > 0; index--) {
++                                int j = body.getRandom().nextInt(index + 1);
++                                BlockPos temp = poses[index];
++                                poses[index] = poses[j];
++                                poses[j] = temp;
++                            }
++                        } else {
++                            Collections.shuffle(Arrays.asList(poses));
+                         }
+ 
+                         for (BlockPos pos : poses) {

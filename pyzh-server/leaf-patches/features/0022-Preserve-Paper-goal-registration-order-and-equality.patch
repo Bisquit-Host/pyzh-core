@@ -1,0 +1,233 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:45:30 +0300
+Subject: [PATCH] Preserve Paper goal registration order and equality
+
+Append goals in registration order and deduplicate by goal equality across
+priorities. Record structural changes only during iteration so selectors can
+repair array positions after callbacks remove or append goals.
+
+diff --git a/java/org/dreeam/leaf/util/map/BinaryGoalSet.java b/java/org/dreeam/leaf/util/map/BinaryGoalSet.java
+index 194c20821faf5007248c9ad638ed930feb742d9d..db68a1f03f5837c83aca79776e533b9854e8fb73 100644
+--- a/java/org/dreeam/leaf/util/map/BinaryGoalSet.java
++++ b/java/org/dreeam/leaf/util/map/BinaryGoalSet.java
+@@ -11,6 +11,11 @@ public final class BinaryGoalSet extends AbstractSet<WrappedGoal> {
+     private @Nullable WrappedGoal[] a;
+     private int size;
+     private static final int DEFAULT_CAPACITY = 4;
++    private static final int APPEND = -1;
++    private static final int CLEAR = -2;
++    private int iterationDepth;
++    private int[] changes = new int[DEFAULT_CAPACITY];
++    private int changeCount;
+ 
+     public BinaryGoalSet() {
+         this.a = EMPTY_ARRAY;
+@@ -25,6 +30,7 @@ public final class BinaryGoalSet extends AbstractSet<WrappedGoal> {
+     public void clear() {
+         Arrays.fill(a, 0, size, null);
+         size = 0;
++        recordChange(CLEAR);
+     }
+ 
+     @Override
+@@ -36,36 +42,17 @@ public final class BinaryGoalSet extends AbstractSet<WrappedGoal> {
+     public boolean add(final WrappedGoal goal) {
+         Objects.requireNonNull(goal);
+ 
+-        if (size == a.length) {
+-            grow();
+-        }
+-
+-        final int priority = goal.getPriority();
+-        int left = 0;
+-        int right = size;
+-
+-        while (left < right) {
+-            final int mid = (left + right) >>> 1;
+-            if (Objects.requireNonNull(a[mid]).getPriority() < priority) {
+-                left = mid + 1;
+-            } else {
+-                right = mid;
+-            }
+-        }
+-
+-        int gap = left;
+-        while (gap < size && Objects.requireNonNull(a[gap]).getPriority() == priority) {
+-            if (a[gap] == goal) {
++        for (int i = 0; i < size; i++) {
++            if (goal.equals(a[i])) {
+                 return false;
+             }
+-            gap++;
+         }
+-
+-        if (left < size) {
+-            System.arraycopy(a, left, a, left + 1, size - left);
++        if (size == a.length) {
++            grow();
+         }
+-        a[left] = goal;
++        a[size] = goal;
+         size++;
++        recordChange(APPEND);
+         return true;
+     }
+ 
+@@ -75,23 +62,9 @@ public final class BinaryGoalSet extends AbstractSet<WrappedGoal> {
+             return false;
+         }
+ 
+-        final int priority = goal.getPriority();
+-
+-        int left = 0;
+-        int right = size;
+-
+-        while (left < right) {
+-            final int mid = (left + right) >>> 1;
+-            if (Objects.requireNonNull(a[mid]).getPriority() < priority) {
+-                left = mid + 1;
+-            } else {
+-                right = mid;
+-            }
+-        }
+-
+         int gap = -1;
+-        for (int i = left; i < size && Objects.requireNonNull(a[i]).getPriority() == priority; i++) {
+-            if (a[i] == goal) {
++        for (int i = 0; i < size; i++) {
++            if (goal.equals(a[i])) {
+                 gap = i;
+                 break;
+             }
+@@ -101,31 +74,79 @@ public final class BinaryGoalSet extends AbstractSet<WrappedGoal> {
+             return false;
+         }
+ 
+-        if (gap < size - 1) {
+-            System.arraycopy(a, gap + 1, a, gap, size - gap - 1);
++        removeAt(gap);
++        return true;
++    }
++
++    private void removeAt(int index) {
++        System.arraycopy(a, index + 1, a, index, size - index - 1);
++        a[--size] = null;
++        recordChange(index);
++    }
++
++    private void recordChange(int index) {
++        if (iterationDepth == 0) {
++            return;
++        }
++        if (changeCount == changes.length) {
++            changes = Arrays.copyOf(changes, Math.max(4, changes.length * 2));
++        }
++        changes[changeCount++] = index;
++    }
++
++    // Only mutations write the journal. The selector keeps its ordinary array loop between changes.
++    public int beginIteration() {
++        iterationDepth++;
++        return changeCount;
++    }
++
++    public int iterationVersion() {
++        return changeCount;
++    }
++
++    public int repairIndex(int index, int version) {
++        for (int i = version; i < changeCount; i++) {
++            int change = changes[i];
++            if (change == CLEAR) {
++                return size;
++            }
++            if (change >= 0 && change <= index) {
++                index--;
++            }
+         }
++        return index;
++    }
+ 
+-        size--;
+-        a[size] = null;
+-        return true;
++    public void endIteration() {
++        if (--iterationDepth == 0) {
++            changeCount = 0;
++        }
+     }
+ 
+     @Override
+     public boolean removeIf(final Predicate<? super WrappedGoal> filter) {
+         Objects.requireNonNull(filter);
+-
+         boolean removed = false;
+-        for (int i = size - 1; i >= 0; i--) {
+-            final WrappedGoal e = Objects.requireNonNull(a[i]);
+-            if (!filter.test(e)) {
+-                continue;
+-            }
+-            if (i < size - 1) {
+-                System.arraycopy(a, i + 1, a, i, size - i - 1);
++        int version = beginIteration();
++        try {
++            WrappedGoal[] elements = a;
++            for (int i = 0, count = size; i < count; i++) {
++                WrappedGoal goal = elements[i];
++                if (filter.test(goal)) {
++                    removed |= remove(goal);
++                }
++                if (version != changeCount) {
++                    if (i + 1 == count) {
++                        break;
++                    }
++                    i = repairIndex(i, version);
++                    elements = a;
++                    count = size;
++                    version = changeCount;
++                }
+             }
+-            size--;
+-            a[size] = null;
+-            removed = true;
++        } finally {
++            endIteration();
+         }
+         return removed;
+     }
+@@ -136,21 +157,8 @@ public final class BinaryGoalSet extends AbstractSet<WrappedGoal> {
+             return false;
+         }
+ 
+-        final int priority = goal.getPriority();
+-        int left = 0;
+-        int right = size;
+-
+-        while (left < right) {
+-            final int mid = (left + right) >>> 1;
+-            if (Objects.requireNonNull(a[mid]).getPriority() < priority) {
+-                left = mid + 1;
+-            } else {
+-                right = mid;
+-            }
+-        }
+-
+-        for (int i = left; i < size && Objects.requireNonNull(a[i]).getPriority() == priority; i++) {
+-            if (a[i] == goal) {
++        for (int i = 0; i < size; i++) {
++            if (goal.equals(a[i])) {
+                 return true;
+             }
+         }
+@@ -190,9 +198,7 @@ public final class BinaryGoalSet extends AbstractSet<WrappedGoal> {
+                 if (last == -1) {
+                     throw new IllegalStateException();
+                 }
+-                System.arraycopy(a, last + 1, a, last, size - last - 1);
+-                size--;
+-                a[size] = null;
++                removeAt(last);
+                 cursor = last;
+                 last = -1;
+             }
