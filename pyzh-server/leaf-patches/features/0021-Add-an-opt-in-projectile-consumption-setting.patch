@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:47:36 +0300
+Subject: [PATCH] Add an opt-in projectile consumption setting
+
+Keep Paper bow and crossbow consumption semantics by default and expose the Leaf rewrite as an explicit choice.
+
+diff --git a/java/org/dreeam/leaf/config/modules/fixes/ProjectileConsumption.java b/java/org/dreeam/leaf/config/modules/fixes/ProjectileConsumption.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6124f90dae412e925a10bf80afd2640767699cb
+--- /dev/null
++++ b/java/org/dreeam/leaf/config/modules/fixes/ProjectileConsumption.java
+@@ -0,0 +1,18 @@
++package org.dreeam.leaf.config.modules.fixes;
++
++import org.dreeam.leaf.config.ConfigCategory;
++import org.dreeam.leaf.config.ConfigModule;
++
++public class ProjectileConsumption extends ConfigModule {
++    public static boolean enabled = false;
++
++    public String basePath() {
++        return ConfigCategory.FIXES.basePath() + ".projectile-consumption";
++    }
++
++    @Override
++    public void onLoaded() {
++        enabled = globalConfig.getBoolean(basePath() + ".enabled", enabled,
++            "Defer bow ammo consumption and retain crossbow charges when shooting events are cancelled or do not consume items.");
++    }
++}

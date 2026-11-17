@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:47:35 +0300
+Subject: [PATCH] Retain item component subscriptions when changing type
+
+Notify equipment subscribers before a type change and transfer component
+map tracking without force-unsubscribing the equipment.
+
+diff --git a/net/minecraft/world/item/ItemStack.java b/net/minecraft/world/item/ItemStack.java
+index 6f9316b98759143b7c44156e455c9da2edea59ed..8d5bca0c09bca280161caafc9e9d6a9255da6b6d 100644
+--- a/net/minecraft/world/item/ItemStack.java
++++ b/net/minecraft/world/item/ItemStack.java
+@@ -1330,12 +1330,19 @@ public final class ItemStack implements DataComponentHolder, ItemInstance, net.c
+     // CraftBukkit start
+     @Deprecated
+     public void setItem(Item item) {
++        if (this.subscriber != null) {
++            this.subscriber.lithium$notify(this, this.subscriberData);
++        }
+         this.bukkitStack = null;
+         this.item = item.builtInRegistryHolder();
+         // Paper start - change base component prototype
+         final DataComponentPatch patch = this.getComponentsPatch();
++        this.components.lithium$unsubscribe(this);
+         this.components = new PatchedDataComponentMap(this.item.components());
+         this.applyComponents(patch);
++        if (this.subscriber != null) {
++            this.startTrackingChanges();
++        }
+         // Paper end - change base component prototype
+     }
+     // CraftBukkit end
