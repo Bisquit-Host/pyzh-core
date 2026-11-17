@@ -1,0 +1,288 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 17 Nov 2026 17:59:04 +0300
+Subject: [PATCH] Cache waypoint connection snapshots
+
+Reuse Guava entry-membership snapshots and player row views until a pair changes. Keep the original table, live entry values, iteration order and validation/send points, including reentrant sends. Identical block/chunk position objects have zero distance.
+
+Packet differential coverage: 80,000 operations, reentrant updates, and 10,000 checks against the old connection arithmetic and packets.
+
+Combined waypoint and no-listener movement changes, six interleaved players-moving runs per jar: 9.436 -> 7.058 ms/tick, -25.20% with a 95% half-width of 1.13 percentage points. Main-thread allocation: 9165.735 -> 5007.162 KiB/tick, -45.37% with a 95% half-width of 0.61 points. Exact digests match. All six other scenarios passed two runs per jar without digest drift or a significant performance difference. One optimized target run logged a pre-event movement-validation rejection whose physical cause was not reconstructed. All six original pairs are retained in the statistics and the warning is documented in the report.
+
+diff --git a/net/minecraft/server/waypoints/ServerWaypointManager.java b/net/minecraft/server/waypoints/ServerWaypointManager.java
+index 6774051521794990278d5ef5cf6b3dab05d3337e..2a7bae0b2c620b00f38d4c48f9a42f3fe26a07fa 100644
+--- a/net/minecraft/server/waypoints/ServerWaypointManager.java
++++ b/net/minecraft/server/waypoints/ServerWaypointManager.java
+@@ -2,23 +2,44 @@ package net.minecraft.server.waypoints;
+ 
+ import com.google.common.collect.HashBasedTable;
+ import com.google.common.collect.ImmutableSet;
+-import com.google.common.collect.Sets;
+ import com.google.common.collect.Table;
+ import com.google.common.collect.Tables;
+-import com.google.common.collect.Sets.SetView;
++import java.util.HashMap;
+ import java.util.HashSet;
++import java.util.Iterator;
+ import java.util.Map;
+-import java.util.Set;
+ import java.util.Map.Entry;
++import java.util.Set;
+ import net.minecraft.server.level.ServerPlayer;
+ import net.minecraft.world.level.gamerules.GameRules;
+ import net.minecraft.world.waypoints.WaypointManager;
+ import net.minecraft.world.waypoints.WaypointTransmitter;
++import org.jspecify.annotations.Nullable;
+ 
+ public class ServerWaypointManager implements WaypointManager<WaypointTransmitter> {
+     private final Set<WaypointTransmitter> waypoints = new HashSet<>();
+     private final Set<ServerPlayer> players = new HashSet<>();
+     private final Table<ServerPlayer, WaypointTransmitter, WaypointTransmitter.Connection> connections = HashBasedTable.create();
++    // Pyzh start - Cache waypoint connection snapshots
++    private static final class Connections<K> {
++        final Map<K, WaypointTransmitter.Connection> view;
++        private @Nullable ImmutableSet<Entry<K, WaypointTransmitter.Connection>> snapshot;
++
++        Connections(final Map<K, WaypointTransmitter.Connection> view) {
++            this.view = view;
++        }
++
++        // Guava entries keep their live values. Reuse their membership and order until a pair is
++        // added or removed; replacing a connection updates the value seen by existing snapshots.
++        ImmutableSet<Entry<K, WaypointTransmitter.Connection>> entries() {
++            if (this.snapshot == null) this.snapshot = ImmutableSet.copyOf(this.view.entrySet());
++            return this.snapshot;
++        }
++    }
++
++    private final Map<ServerPlayer, Connections<WaypointTransmitter>> rows = new HashMap<>();
++    private final Map<WaypointTransmitter, Connections<ServerPlayer>> columns = new HashMap<>();
++    // Pyzh end - Cache waypoint connection snapshots
+     // Paper start - optimize ServerWaypointManager with locator bar disabled
+     public boolean locatorBarEnabled; // Avoid a gamerule lookup for each player
+ 
+@@ -46,15 +67,16 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+         if (!this.locatorBarEnabled) return; // Paper - optimize ServerWaypointManager with locator bar disabled
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot update waypoints off-main"); // Leaf - SparklyPaper - parallel world ticking
+         if (this.waypoints.contains(waypoint)) {
+-            Map<ServerPlayer, WaypointTransmitter.Connection> playerConnection = Tables.transpose(this.connections).row(waypoint);
+-            SetView<ServerPlayer> potentialPlayers = Sets.difference(this.players, playerConnection.keySet());
+-
+-            for (Entry<ServerPlayer, WaypointTransmitter.Connection> waypointConnection : ImmutableSet.copyOf(playerConnection.entrySet())) {
+-                this.updateConnection(waypointConnection.getKey(), waypoint, waypointConnection.getValue());
++            Connections<ServerPlayer> column = this.columns.get(waypoint);
++            if (column == null) {
++                column = new Connections<>(this.connections.column(waypoint));
++                this.columns.put(waypoint, column);
+             }
+-
+-            for (ServerPlayer player : potentialPlayers) {
+-                this.createConnection(player, waypoint);
++            for (Entry<ServerPlayer, WaypointTransmitter.Connection> entry : column.entries()) {
++                this.updateConnection(entry.getKey(), waypoint, entry.getValue());
++            }
++            for (ServerPlayer player : this.players) {
++                if (!this.playerConnections(player).view.containsKey(waypoint)) this.createConnection(player, waypoint);
+             }
+         }
+     }
+@@ -62,7 +84,14 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     @Override
+     public void untrackWaypoint(final WaypointTransmitter waypoint) {
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot untrack waypoints off-main"); // Leaf - SparklyPaper - parallel world ticking
+-        this.connections.column(waypoint).forEach((player, connection) -> connection.disconnect());
++        // Pyzh start - Cache waypoint connection snapshots
++        for (Entry<ServerPlayer, WaypointTransmitter.Connection> entry : this.connections.column(waypoint).entrySet()) {
++            entry.getValue().disconnect();
++            Connections<WaypointTransmitter> row = this.rows.get(entry.getKey());
++            if (row != null) row.snapshot = null;
++        }
++        this.columns.remove(waypoint);
++        // Pyzh end - Cache waypoint connection snapshots
+         Tables.transpose(this.connections).row(waypoint).clear();
+         this.waypoints.remove(waypoint);
+     }
+@@ -85,24 +114,28 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+     public void updatePlayer(final ServerPlayer player) {
+         if (!this.locatorBarEnabled) return; // Paper - optimize ServerWaypointManager with locator bar disabled
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot update player for waypoints off-main"); // Leaf - SparklyPaper - parallel world ticking
+-        Map<WaypointTransmitter, WaypointTransmitter.Connection> waypointConnections = this.connections.row(player);
+-        SetView<WaypointTransmitter> potentialWaypoints = Sets.difference(this.waypoints, waypointConnections.keySet());
+-
+-        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> waypointConnection : ImmutableSet.copyOf(waypointConnections.entrySet())) {
+-            this.updateConnection(player, waypointConnection.getKey(), waypointConnection.getValue());
++        Connections<WaypointTransmitter> row = this.playerConnections(player);
++        for (Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry : row.entries()) {
++            this.updateConnection(player, entry.getKey(), entry.getValue());
+         }
+-
+-        for (WaypointTransmitter waypoint : potentialWaypoints) {
+-            this.createConnection(player, waypoint);
++        for (WaypointTransmitter waypoint : this.waypoints) {
++            if (!row.view.containsKey(waypoint)) this.createConnection(player, waypoint);
+         }
++        if (!this.connections.containsRow(player)) this.rows.remove(player);
+     }
+ 
+     public void removePlayer(final ServerPlayer player) {
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot remove player from waypoints off-main"); // Leaf - SparklyPaper - parallel world ticking
+-        this.connections.row(player).values().removeIf(connection -> {
+-            connection.disconnect();
+-            return true;
+-        });
++        // Pyzh start - Cache waypoint connection snapshots
++        Iterator<Entry<WaypointTransmitter, WaypointTransmitter.Connection>> iterator = this.connections.row(player).entrySet().iterator();
++        while (iterator.hasNext()) {
++            Entry<WaypointTransmitter, WaypointTransmitter.Connection> entry = iterator.next();
++            entry.getValue().disconnect();
++            iterator.remove();
++            this.invalidateSnapshots(player, entry.getKey());
++        }
++        this.rows.remove(player);
++        // Pyzh end - Cache waypoint connection snapshots
+         this.untrackWaypoint(player);
+         this.players.remove(player);
+     }
+@@ -111,6 +144,8 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+         if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, "Cannot break all waypoint connections off-main"); // Leaf - SparklyPaper - parallel world ticking
+         this.connections.values().forEach(WaypointTransmitter.Connection::disconnect);
+         this.connections.clear();
++        this.rows.clear(); // Pyzh - Cache waypoint connection snapshots
++        this.columns.clear(); // Pyzh - Cache waypoint connection snapshots
+     }
+ 
+     public void remakeConnections(final WaypointTransmitter waypoint) {
+@@ -125,44 +160,64 @@ public class ServerWaypointManager implements WaypointManager<WaypointTransmitte
+         return this.waypoints;
+     }
+ 
+-    // Paper start - optimize ServerWaypointManager with locator bar disabled
+-    // Avoid a gamerule lookup for each player
+-    private boolean isLocatorBarEnabledFor(final ServerPlayer player) {
+-        return locatorBarEnabled;
+-    // Paper end - optimize ServerWaypointManager with locator bar disabled
++    // Pyzh start - Cache waypoint connection snapshots
++    private Connections<WaypointTransmitter> playerConnections(final ServerPlayer player) {
++        Connections<WaypointTransmitter> row = this.rows.get(player);
++        if (row == null) {
++            row = new Connections<>(this.connections.row(player));
++            this.rows.put(player, row);
++        }
++        return row;
++    }
++
++    private void invalidateSnapshots(final ServerPlayer player, final WaypointTransmitter waypoint) {
++        Connections<WaypointTransmitter> row = this.rows.get(player);
++        if (row != null) row.snapshot = null;
++        Connections<ServerPlayer> column = this.columns.get(waypoint);
++        if (column != null) column.snapshot = null;
++    }
++
++    private void putConnection(final ServerPlayer player, final WaypointTransmitter waypoint, final WaypointTransmitter.Connection connection) {
++        if (this.connections.put(player, waypoint, connection) == null) this.invalidateSnapshots(player, waypoint);
++    }
++
++    private WaypointTransmitter.@Nullable Connection removeConnection(final ServerPlayer player, final WaypointTransmitter waypoint) {
++        WaypointTransmitter.Connection removed = this.connections.remove(player, waypoint);
++        if (removed != null) {
++            this.invalidateSnapshots(player, waypoint);
++            if (!this.connections.containsRow(player)) this.rows.remove(player);
++        }
++        return removed;
+     }
+ 
+     private void createConnection(final ServerPlayer player, final WaypointTransmitter waypoint) {
+-        if (player != waypoint) {
+-            if (isLocatorBarEnabledFor(player)) {
+-                waypoint.makeWaypointConnectionWith(player).ifPresentOrElse(connection -> {
+-                    this.connections.put(player, waypoint, connection);
+-                    connection.connect();
+-                }, () -> {
+-                    WaypointTransmitter.Connection connection = this.connections.remove(player, waypoint);
+-                    if (connection != null) {
+-                        connection.disconnect();
+-                    }
+-                });
++        if (player != waypoint && this.locatorBarEnabled) {
++            var made = waypoint.makeWaypointConnectionWith(player);
++            if (made.isPresent()) {
++                this.putConnection(player, waypoint, made.get());
++                made.get().connect();
++            } else {
++                WaypointTransmitter.Connection old = this.removeConnection(player, waypoint);
++                if (old != null) old.disconnect();
+             }
+         }
+     }
+ 
+     private void updateConnection(final ServerPlayer player, final WaypointTransmitter waypoint, final WaypointTransmitter.Connection connection) {
+-        if (player != waypoint) {
+-            if (isLocatorBarEnabledFor(player)) {
+-                if (!connection.isBroken()) {
+-                    connection.update();
++        if (player != waypoint && this.locatorBarEnabled) {
++            if (!connection.isBroken()) {
++                connection.update();
++            } else {
++                var made = waypoint.makeWaypointConnectionWith(player);
++                if (made.isPresent()) {
++                    made.get().connect();
++                    this.putConnection(player, waypoint, made.get());
+                 } else {
+-                    waypoint.makeWaypointConnectionWith(player).ifPresentOrElse(newConnection -> {
+-                        newConnection.connect();
+-                        this.connections.put(player, waypoint, newConnection);
+-                    }, () -> {
+-                        connection.disconnect();
+-                        this.connections.remove(player, waypoint);
+-                    });
++                    connection.disconnect();
++                    this.removeConnection(player, waypoint);
+                 }
+             }
+         }
+     }
++    // Pyzh end - Cache waypoint connection snapshots
+ }
+diff --git a/net/minecraft/world/waypoints/WaypointTransmitter.java b/net/minecraft/world/waypoints/WaypointTransmitter.java
+index a249f2ea782dd82c6ddd5fcf22da2a3bb56e9d8b..91fc6097643189817b3bf2c8d937303887bd3c49 100644
+--- a/net/minecraft/world/waypoints/WaypointTransmitter.java
++++ b/net/minecraft/world/waypoints/WaypointTransmitter.java
+@@ -146,7 +146,7 @@ public interface WaypointTransmitter extends Waypoint {
+         @Override
+         public void update() {
+             BlockPos currentPosition = this.source.blockPosition();
+-            if (currentPosition.distManhattan(this.lastPosition) > 0) {
++            if (currentPosition != this.lastPosition && currentPosition.distManhattan(this.lastPosition) > 0) { // Pyzh - Reused positions have zero distance
+                 this.receiver.connection.send(ClientboundTrackedWaypointPacket.updateWaypointPosition(this.source.getUUID(), this.icon, currentPosition));
+                 this.lastPosition = currentPosition;
+             }
+@@ -154,7 +154,8 @@ public interface WaypointTransmitter extends Waypoint {
+ 
+         @Override
+         public int distanceManhattan() {
+-            return this.lastPosition.distManhattan(this.source.blockPosition());
++            BlockPos currentPosition = this.source.blockPosition();
++            return currentPosition == this.lastPosition ? 0 : this.lastPosition.distManhattan(currentPosition); // Pyzh - Reused positions have zero distance
+         }
+ 
+         @Override
+@@ -178,7 +179,8 @@ public interface WaypointTransmitter extends Waypoint {
+ 
+         @Override
+         public int distanceChessboard() {
+-            return this.lastPosition.getChessboardDistance(this.source.chunkPosition());
++            ChunkPos currentPosition = this.source.chunkPosition();
++            return currentPosition == this.lastPosition ? 0 : this.lastPosition.getChessboardDistance(currentPosition); // Pyzh - Reused positions have zero distance
+         }
+ 
+         @Override
+@@ -194,7 +196,7 @@ public interface WaypointTransmitter extends Waypoint {
+         @Override
+         public void update() {
+             ChunkPos currentPosition = this.source.chunkPosition();
+-            if (currentPosition.getChessboardDistance(this.lastPosition) > 0) {
++            if (currentPosition != this.lastPosition && currentPosition.getChessboardDistance(this.lastPosition) > 0) { // Pyzh - Reused positions have zero distance
+                 this.receiver.connection.send(ClientboundTrackedWaypointPacket.updateWaypointChunk(this.source.getUUID(), this.icon, currentPosition));
+                 this.lastPosition = currentPosition;
+             }
