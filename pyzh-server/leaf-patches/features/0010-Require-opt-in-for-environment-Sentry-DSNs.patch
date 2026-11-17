@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:44:22 +0300
+Subject: [PATCH] Require opt-in for environment Sentry DSNs
+
+Ignore SENTRY_DSN unless misc.sentry.allow-environment-dsn is enabled. Keep the configured default empty so a previously resolved environment DSN cannot become a config fallback on reload.
+
+diff --git a/java/org/dreeam/leaf/config/modules/misc/SentryDSN.java b/java/org/dreeam/leaf/config/modules/misc/SentryDSN.java
+index 6e1eb51f22b183e91cf1465cd2ad249975e901ca..bb8733e83b15a8d805bc995f959baa53e8dbdabe 100644
+--- a/java/org/dreeam/leaf/config/modules/misc/SentryDSN.java
++++ b/java/org/dreeam/leaf/config/modules/misc/SentryDSN.java
+@@ -12,13 +12,18 @@ public class SentryDSN extends ConfigModule {
+ 
+     public static String sentryDsnConfigPath;
+     public static String sentryDsn = "";
++    public static boolean allowEnvironmentDsn = false;
+     public static String logLevel = "WARN";
+     public static boolean onlyLogThrown = true;
+ 
+     @Override
+     public void onLoaded() {
+-        String sentryEnvironment = System.getenv("SENTRY_DSN");
+-        String sentryConfig = globalConfig.getString(sentryDsnConfigPath = basePath() + ".dsn", sentryDsn, globalConfig.pickStringRegionBased("""
++        allowEnvironmentDsn = globalConfig.getBoolean(basePath() + ".allow-environment-dsn", false,
++            globalConfig.pickStringRegionBased(
++                "Allow SENTRY_DSN to override the configured DSN.",
++                "允许 SENTRY_DSN 环境变量覆盖配置的 DSN。"));
++        String sentryEnvironment = allowEnvironmentDsn ? System.getenv("SENTRY_DSN") : null;
++        String sentryConfig = globalConfig.getString(sentryDsnConfigPath = basePath() + ".dsn", "", globalConfig.pickStringRegionBased("""
+                 Sentry DSN for improved error logging, leave blank to disable,
+                 Obtain from https://sentry.io/""",
+             """

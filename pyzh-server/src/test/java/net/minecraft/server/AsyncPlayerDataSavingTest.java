@@ -32,6 +32,22 @@ public class AsyncPlayerDataSavingTest {
     @TempDir java.nio.file.Path directory;
 
     @Test
+    public void synchronousPlayerSaveWritesOriginalTagBeforeReturning() {
+        final boolean previousEnabled = AsyncPlayerDataSave.enabled;
+        try {
+            AsyncPlayerDataSave.enabled = false;
+            final CompoundTag data = playerValue(42);
+            final AtomicReference<CompoundTag> written = new AtomicReference<>();
+            final CompletableFuture<Void> saved = AsyncPlayerDataSaving.submitPlayer(UUID.randomUUID(), data, written::set);
+            Assertions.assertTrue(saved.isDone());
+            Assertions.assertFalse(saved.isCompletedExceptionally());
+            Assertions.assertSame(data, written.get());
+        } finally {
+            AsyncPlayerDataSave.enabled = previousEnabled;
+        }
+    }
+
+    @Test
     public void coordinatesPlayerAndLevelPersistenceWithoutForegroundBlocking() throws Exception {
         final boolean previousEnabled = AsyncPlayerDataSave.enabled;
         final CountDownLatch samePlayerRelease = new CountDownLatch(1);

@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:44:22 +0300
+Subject: [PATCH] Restore Paper behavior in Gale and Leaf config defaults
+
+Use the existing Paper-compatible branches for entity timing, phantom spawning, sheep breeding, TPS, player movement and map terrain updates. Keep upstream options available for explicit opt-in behavior.
+
+diff --git a/java/org/dreeam/leaf/config/modules/misc/Including5sIngetTPS.java b/java/org/dreeam/leaf/config/modules/misc/Including5sIngetTPS.java
+index 6d01c04988658e7c635b4b7cb5314bb8bcb95ad3..d2d478a021086d7249090585385b5473d5a579b3 100644
+--- a/java/org/dreeam/leaf/config/modules/misc/Including5sIngetTPS.java
++++ b/java/org/dreeam/leaf/config/modules/misc/Including5sIngetTPS.java
+@@ -9,7 +9,7 @@ public class Including5sIngetTPS extends ConfigModule {
+         return ConfigCategory.MISC.basePath();
+     }
+ 
+-    public static boolean enabled = true;
++    public static boolean enabled = false;
+ 
+     @Override
+     public void onLoaded() {
+diff --git a/java/org/dreeam/leaf/config/modules/opt/FasterStructureGenFutureSequencing.java b/java/org/dreeam/leaf/config/modules/opt/FasterStructureGenFutureSequencing.java
+index 2b855c4463266cee8e3ede83aa71ae503497d7ff..e4661bee12fe3ab4ad385618257217ddce3c8d8d 100644
+--- a/java/org/dreeam/leaf/config/modules/opt/FasterStructureGenFutureSequencing.java
++++ b/java/org/dreeam/leaf/config/modules/opt/FasterStructureGenFutureSequencing.java
+@@ -9,13 +9,13 @@ public class FasterStructureGenFutureSequencing extends ConfigModule {
+         return ConfigCategory.PERF.basePath();
+     }
+ 
+-    public static boolean enabled = true;
++    public static boolean enabled = false;
+ 
+     @Override
+     public void onLoaded() {
+         enabled = globalConfig.getBoolean(basePath() + ".faster-structure-gen-future-sequencing", enabled,
+             globalConfig.pickStringRegionBased(
+-                "May cause the inconsistent order of future compose tasks.",
+-                "更快的结构生成任务分段."));
++                "Use an alternative structure generation future collector. Results retain input order.",
++                "使用另一种结构生成任务结果收集方式，结果保持输入顺序。"));
+     }
+ }
+diff --git a/java/org/dreeam/leaf/config/modules/opt/OptimizePlayerMovementProcessing.java b/java/org/dreeam/leaf/config/modules/opt/OptimizePlayerMovementProcessing.java
+index 8636518b4f6bdad415d1186edd5c8d168a98fcfe..e7e7974139fb7f05f3cb0e2d58b2d9a80afdc4fd 100644
+--- a/java/org/dreeam/leaf/config/modules/opt/OptimizePlayerMovementProcessing.java
++++ b/java/org/dreeam/leaf/config/modules/opt/OptimizePlayerMovementProcessing.java
+@@ -9,13 +9,13 @@ public class OptimizePlayerMovementProcessing extends ConfigModule {
+         return ConfigCategory.PERF.basePath();
+     }
+ 
+-    public static boolean enabled = true;
++    public static boolean enabled = false;
+ 
+     @Override
+     public void onLoaded() {
+         enabled = globalConfig.getBoolean(basePath() + ".optimize-player-movement", enabled, globalConfig.pickStringRegionBased("""
+-                Whether to optimize player movement processing by skipping unnecessary edge checks and avoiding redundant view distance updates.""",
++                Whether to skip server-side sneak edge checks and avoid redundant view distance updates.""",
+             """
+-                是否优化玩家移动处理，跳过不必要的边缘检查并避免冗余的视距更新。"""));
++                是否跳过服务端潜行边缘检查并避免冗余的视距更新。"""));
+     }
+ }
+diff --git a/java/org/dreeam/leaf/config/modules/opt/SkipMapItemDataUpdates.java b/java/org/dreeam/leaf/config/modules/opt/SkipMapItemDataUpdates.java
+index edb3b7c6edaa5b17af4e3aa5fb8bd537a886208f..3776da6a627a1020476a46653fa7d36635635857 100644
+--- a/java/org/dreeam/leaf/config/modules/opt/SkipMapItemDataUpdates.java
++++ b/java/org/dreeam/leaf/config/modules/opt/SkipMapItemDataUpdates.java
+@@ -9,7 +9,7 @@ public class SkipMapItemDataUpdates extends ConfigModule {
+         return ConfigCategory.PERF.basePath();
+     }
+ 
+-    public static boolean enabled = true;
++    public static boolean enabled = false;
+ 
+     @Override
+     public void onLoaded() {
+diff --git a/java/org/galemc/gale/configuration/GaleGlobalConfiguration.java b/java/org/galemc/gale/configuration/GaleGlobalConfiguration.java
+index 15548d11475c92c4b5aaa14de1b2eec2b22aaf0e..87f5d690d98b54435124d3230d79ca8a8ea234f2 100644
+--- a/java/org/galemc/gale/configuration/GaleGlobalConfiguration.java
++++ b/java/org/galemc/gale/configuration/GaleGlobalConfiguration.java
+@@ -33,7 +33,7 @@ public class GaleGlobalConfiguration extends ConfigurationPart {
+         public class ReducedIntervals extends ConfigurationPart {
+ 
+             public int increaseTimeStatistics = 1; // Gale - Hydrinity - increase time statistics in intervals
+-            public int updateEntityLineOfSight = 4; // Gale - Petal - reduce line of sight updates
++            public int updateEntityLineOfSight = 1; // Gale - Petal - reduce line of sight updates
+ 
+             @PostProcess
+             public void postProcess() {
+diff --git a/java/org/galemc/gale/configuration/GaleWorldConfiguration.java b/java/org/galemc/gale/configuration/GaleWorldConfiguration.java
+index 7ad26703e828e2a282476f3052c311db230bf6cd..0eced8c576743369bbf26790d3a3fe1b63c36e4e 100644
+--- a/java/org/galemc/gale/configuration/GaleWorldConfiguration.java
++++ b/java/org/galemc/gale/configuration/GaleWorldConfiguration.java
+@@ -36,7 +36,7 @@ public class GaleWorldConfiguration extends ConfigurationPart {
+     public class SmallOptimizations extends ConfigurationPart {
+ 
+         public boolean saveFireworks = true; // Gale - EMC - make saving fireworks configurable
+-        public boolean useOptimizedSheepOffspringColor = true; // Gale - carpet-fixes - optimize sheep offspring color
++        public boolean useOptimizedSheepOffspringColor = false; // Gale - carpet-fixes - optimize sheep offspring color
+ 
+         // Gale start - Airplane - reduce projectile chunk loading
+         public MaxProjectileChunkLoads maxProjectileChunkLoads;
+@@ -60,15 +60,15 @@ public class GaleWorldConfiguration extends ConfigurationPart {
+ 
+         public class ReducedIntervals extends ConfigurationPart {
+ 
+-            public int checkStuckInWall = 10; // Gale - Pufferfish - reduce in wall checks
+-            public int villagerItemRepickup = 100; // Gale - EMC - reduce villager item re-pickup
++            public int checkStuckInWall = 1; // Gale - Pufferfish - reduce in wall checks
++            public int villagerItemRepickup = -1; // Gale - EMC - reduce villager item re-pickup
+ 
+         }
+ 
+         public LoadChunks loadChunks;
+ 
+         public class LoadChunks extends ConfigurationPart {
+-            public boolean toSpawnPhantoms = false; // Gale - MultiPaper - don't load chunks to spawn phantoms
++            public boolean toSpawnPhantoms = true; // Gale - MultiPaper - don't load chunks to spawn phantoms
+             public boolean toActivateClimbingEntities = false; // Gale - don't load chunks to activate climbing entities
+         }
+ 
+@@ -97,7 +97,7 @@ public class GaleWorldConfiguration extends ConfigurationPart {
+         }
+ 
+         public boolean entitiesCanRandomStrollIntoNonTickingChunks = true; // Gale - MultiPaper - prevent entities random strolling into non-ticking chunks
+-        public double entityWakeUpDurationRatioStandardDeviation = 0.2; // Gale - variable entity wake-up duration
++        public double entityWakeUpDurationRatioStandardDeviation = 0.0; // Gale - variable entity wake-up duration
+         public boolean hideFlamesOnEntitiesWithFireResistance = false; // Gale - Slice - hide flames on entities with fire resistance
+         public boolean tryRespawnEnderDragonAfterEndCrystalPlace = true; // Gale - Pufferfish - make ender dragon respawn attempt after placing end crystals configurable
+ 
