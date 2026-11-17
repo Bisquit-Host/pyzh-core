@@ -8,7 +8,12 @@ import org.junit.platform.suite.api.SuiteDisplayName;
 
 @Suite(failIfNoTests = false)
 @SuiteDisplayName("Test suite for Pyzh tests in packages LeafTestSuite does not select")
-@SelectPackages("org.dreeam.leaf")
+@SelectPackages({
+    "org.dreeam.leaf",
+    "org.leavesmc.leaves",
+    "org.bukkit",
+    "io.papermc.paper"
+})
 @IncludeTags("LeafTest")
 @ConfigurationParameter(key = "TestSuite", value = "LeafTest")
 public class PyzhTestSuite {

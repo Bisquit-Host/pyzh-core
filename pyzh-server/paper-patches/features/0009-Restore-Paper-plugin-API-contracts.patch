@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:47:28 +0300
+Subject: [PATCH] Restore Paper plugin API contracts
+
+Preserve tile counts, event thread checks, block break defaults and inventory validation. Restore smooth teleport state on every exit, honor the entity cache switch and retain the Spigot unknown-command field and setting.
+
+diff --git a/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java b/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java
+index 6df123b41169ef2eb8af12ece86e4d7208022f1e..beb8a4864b3409b4e1e7010f3f6b6fd4af1842a5 100644
+--- a/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java
++++ b/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java
+@@ -35,16 +35,15 @@ class PaperEventManager {
+ 
+     // SimplePluginManager
+     public void callEvent(@NotNull Event event) {
+-        // Leaf start - Skip event if no listeners
+-        RegisteredListener[] listeners = event.getHandlers().getRegisteredListeners();
+-        if (listeners.length == 0) return;
+-        // Leaf end - Skip event if no listeners
+         if (event.isAsynchronous() && this.server.isPrimaryThread()) {
+             throw new IllegalStateException(event.getEventName() + " may only be triggered asynchronously.");
+         } else if (!event.isAsynchronous() && !this.server.isPrimaryThread() && !this.server.isStopping()) {
+             throw new IllegalStateException(event.getEventName() + " may only be triggered synchronously.");
+         }
+ 
++        RegisteredListener[] listeners = event.getHandlers().getRegisteredListeners();
++        if (listeners.length == 0) return;
++
+         // Leaves start - skip photographer
+         if (event instanceof org.bukkit.event.player.PlayerEvent playerEvent && playerEvent.getPlayer() instanceof org.leavesmc.leaves.entity.photographer.Photographer) {
+             return;
+diff --git a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
+index 9bb0d58be45b82019540ad7ac8e80fec1ab0b17e..7e20baf5f649075d00bc8d2afe5b6a304b7d2a60 100644
+--- a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
++++ b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
+@@ -223,7 +223,6 @@ public class CraftWorld extends CraftRegionAccessor implements World {
+ 
+     @Override
+     public int getTileEntityCount() {
+-        if (org.dreeam.leaf.config.modules.opt.OptimizeBlockEntities.enabled) return world.blockEntityTickers.size(); // Leaf - Optimize block entities count
+         // We don't use the full world block entity list, so we must iterate chunks
+         int size = 0;
+         for (ChunkHolder playerchunk : ca.spottedleaf.moonrise.common.PlatformHooks.get().getVisibleChunkHolders(this.world)) {
+diff --git a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
+index 16af5e2b2663b38db4921b2edae2ea54c25b14e8..1a7c645e6510f7eade5519cf54bfd80269dab96e 100644
+--- a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
++++ b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
+@@ -654,17 +654,14 @@ public class CraftBlock implements Block {
+             } else {
+                 org.bukkit.Bukkit.getLogger().log(java.util.logging.Level.WARNING, "PWT: Attempted breakNaturally on non-ServerLevel - safety not guaranteed.");
+             }
+-            // Delegates to overload
+-            return this.breakNaturally(null, true, true); // Default to dropping XP and triggering effects
+-        } else {
+-            return this.breakNaturally(null);
+         }
+         // Leaf end - SparklyPaper - parallel world ticking - Write operation check
++        return this.breakNaturally(null);
+     }
+ 
+     @Override
+     public boolean breakNaturally(ItemStack item) {
+-        return org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled ? this.breakNaturally(item, true, true) : this.breakNaturally(item, false); // Leaf - SparklyPaper - parallel world ticking - Delegates to full overload
++        return this.breakNaturally(item, false);
+     }
+ 
+     @Override
+diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntityType.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntityType.java
+index af3e1ed5cb3c5cdd00f492078548a86895348d99..e9406d46af0ee4a1d0c472e407470c515589ba7c 100644
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntityType.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntityType.java
+@@ -20,15 +20,19 @@ public class CraftEntityType {
+     public static EntityType minecraftToBukkit(net.minecraft.world.entity.EntityType<?> minecraft) {
+         Preconditions.checkArgument(minecraft != null);
+         // Leaf start - Cache CraftEntityType#minecraftToBukkit convert
+-        EntityType asBukkit = MINECRAFT_TO_BUKKIT_KEY_CACHE.get(minecraft);
+-
+-        if (org.dreeam.leaf.config.modules.opt.EnableCachedMTBEntityTypeConvert.enabled && asBukkit != null) {
+-            return asBukkit;
++        boolean cache = org.dreeam.leaf.config.modules.opt.EnableCachedMTBEntityTypeConvert.enabled;
++        if (cache) {
++            EntityType asBukkit = MINECRAFT_TO_BUKKIT_KEY_CACHE.get(minecraft);
++            if (asBukkit != null) {
++                return asBukkit;
++            }
+         }
+         // Leaf end - Cache CraftEntityType#minecraftToBukkit convert
+         EntityType bukkit = Registry.ENTITY_TYPE.get(CraftNamespacedKey.fromMinecraft(net.minecraft.world.entity.EntityType.getKey(minecraft)));
+         Preconditions.checkArgument(bukkit != null);
+-        MINECRAFT_TO_BUKKIT_KEY_CACHE.put(minecraft, bukkit); // Leaf - Cache CraftEntityType#minecraftToBukkit convert
++        if (cache) {
++            MINECRAFT_TO_BUKKIT_KEY_CACHE.put(minecraft, bukkit);
++        }
+         return bukkit;
+     }
+ 
+diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+index bd2b11116b98ca0712d8ecf44c1b022253a3a715..628917ab65cc38d764e468a601e6f95e63bea2dd 100644
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
+@@ -1394,18 +1394,25 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
+     @Override
+     public void teleportWithoutRespawn(Location location) {
+         ServerPlayer serverPlayer = getHandle();
++        boolean previous = serverPlayer.smoothWorldTeleport;
+         serverPlayer.smoothWorldTeleport = true;
+-        teleport(location);
+-        serverPlayer.smoothWorldTeleport = false;
++        try {
++            teleport(location);
++        } finally {
++            serverPlayer.smoothWorldTeleport = previous;
++        }
+     }
+ 
+     @Override
+     public boolean teleportWithoutRespawnOptionally(Location location) {
+         ServerPlayer serverPlayer = getHandle();
++        boolean previous = serverPlayer.smoothWorldTeleport;
+         serverPlayer.smoothWorldTeleport = true;
+-        boolean teleportResult = teleport(location);
+-        serverPlayer.smoothWorldTeleport = false;
+-        return teleportResult;
++        try {
++            return teleport(location);
++        } finally {
++            serverPlayer.smoothWorldTeleport = previous;
++        }
+     }
+     // Slice end
+ 
+diff --git a/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java b/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java
+index ebbb143547ba577ced90b353508feebfb0cb6e33..7239d5fa2a6d481570d43ec811a2dfd1bf370e0e 100644
+--- a/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java
++++ b/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java
+@@ -85,7 +85,11 @@ public class CraftInventory implements Inventory {
+ 
+     @Override
+     public void setContents(ItemStack[] items) {
+-        // Preconditions.checkArgument(items.length <= this.getSize(), "Invalid inventory size (%s); expected %s or less", items.length, this.getSize()); // Purpur - Barrels and enderchests 6 rows
++        int capacity = this.getSize();
++        if (org.purpurmc.purpur.PurpurConfig.enderChestSixRows && this.getInventory() instanceof PlayerEnderChestContainer) {
++            capacity = Math.max(capacity, this.getInventory().getContents().size());
++        }
++        Preconditions.checkArgument(items.length <= capacity, "Invalid inventory size (%s); expected %s or less", items.length, capacity);
+ 
+         for (int i = 0; i < this.getSize(); i++) {
+             if (i >= items.length) {
+diff --git a/src/main/java/org/spigotmc/SpigotConfig.java b/src/main/java/org/spigotmc/SpigotConfig.java
+index 2fb235c0dd463fe9bad3c08ed5077a61c854fab8..025ec3f3e84a3367b4d709c8c3ecd98f6dfecab4 100644
+--- a/src/main/java/org/spigotmc/SpigotConfig.java
++++ b/src/main/java/org/spigotmc/SpigotConfig.java
+@@ -152,6 +152,7 @@ public class SpigotConfig {
+     }
+ 
+     public static String whitelistMessage;
++    public static String unknownCommandMessage;
+     public static String serverFullMessage;
+     public static String outdatedClientMessage = "Outdated client! Please use {0}";
+     public static String outdatedServerMessage = "Outdated server! I'm still on {0}";
+@@ -167,6 +168,7 @@ public class SpigotConfig {
+         }
+ 
+         SpigotConfig.whitelistMessage = SpigotConfig.transform(SpigotConfig.getString("messages.whitelist", "You are not whitelisted on this server!"));
++        SpigotConfig.unknownCommandMessage = SpigotConfig.transform(SpigotConfig.getString("messages.unknown-command", "Unknown command. Type \"/help\" for help."));
+         SpigotConfig.serverFullMessage = SpigotConfig.transform(SpigotConfig.getString("messages.server-full", "The server is full!"));
+         SpigotConfig.outdatedClientMessage = SpigotConfig.transform(SpigotConfig.getString("messages.outdated-client", SpigotConfig.outdatedClientMessage));
+         SpigotConfig.outdatedServerMessage = SpigotConfig.transform(SpigotConfig.getString("messages.outdated-server", SpigotConfig.outdatedServerMessage));

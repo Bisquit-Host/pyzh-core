@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:47:29 +0300
+Subject: [PATCH] Respect disabled Leaves protocols during initialization
+
+Register inbound codecs only for active payload receivers and bypass empty bytebuf dispatch. Isolate protocol constructor failures, skip inactive initialization and initialize Jade before its first active reload.
+
+diff --git a/java/org/leavesmc/leaves/protocol/core/LeavesProtocolManager.java b/java/org/leavesmc/leaves/protocol/core/LeavesProtocolManager.java
+index 3a71371dae60ee1dfccbcf5d58dafb3c981c3c48..4b08d2abf0b4cab56ce086173ef1989a2ea37994 100644
+--- a/java/org/leavesmc/leaves/protocol/core/LeavesProtocolManager.java
++++ b/java/org/leavesmc/leaves/protocol/core/LeavesProtocolManager.java
+@@ -60,9 +60,13 @@ public class LeavesProtocolManager {
+     private static final List<EmptyInvokerHolder<ProtocolHandler.ReloadServer>> RELOAD_SERVER = new ArrayList<>();
+     private static final List<EmptyInvokerHolder<ProtocolHandler.ReloadDataPack>> RELOAD_DATAPACK = new ArrayList<>();
+ 
+-    @SuppressWarnings("unchecked")
+     public static void init() {
+-        for (Class<?> clazz : getClasses("org.leavesmc.leaves.protocol")) {
++        init(getClasses("org.leavesmc.leaves.protocol"));
++    }
++
++    @SuppressWarnings("unchecked")
++    static void init(Set<Class<?>> classes) {
++        for (Class<?> clazz : classes) {
+             if (LeavesCustomPayload.class.isAssignableFrom(clazz) && !clazz.equals(LeavesCustomPayload.class)) {
+                 for (Field field : clazz.getDeclaredFields()) {
+                     field.setAccessible(true);
+@@ -96,7 +100,7 @@ public class LeavesProtocolManager {
+                 protocol = (LeavesProtocol) constructor.newInstance();
+             } catch (Throwable throwable) {
+                 LOGGER.error("Failed to load class {}. {}", clazz.getName(), throwable);
+-                return;
++                continue;
+             }
+ 
+             // Leaf start - optimize leaves protocol manager
+@@ -209,6 +213,9 @@ public class LeavesProtocolManager {
+             }
+         }
+         for (var idInfo : IDS.entrySet()) {
++            if (!PAYLOAD_RECEIVERS.containsKey(idInfo.getKey())) {
++                continue;
++            }
+             var codec = CODECS.get(idInfo.getKey());
+             if (codec == null) {
+                 throw new IllegalArgumentException("Payload " + idInfo.getKey() + " is not configured correctly");
+@@ -252,7 +259,14 @@ public class LeavesProtocolManager {
+         }
+     }
+ 
++    public static boolean hasBytebufReceivers() {
++        return !STRICT_BYTEBUF_RECEIVERS.isEmpty() || !NAMESPACED_BYTEBUF_RECEIVERS.isEmpty() || !GENERIC_BYTEBUF_RECEIVERS.isEmpty();
++    }
++
+     public static boolean handleBytebuf(IdentifierSelector selector, Identifier location, ByteBuf buf) {
++        if (!hasBytebufReceivers()) {
++            return false;
++        }
+         RegistryFriendlyByteBuf buf1 = ProtocolUtils.decorate(buf);
+         BytebufReceiverInvokerHolder holder;
+         if ((holder = STRICT_BYTEBUF_RECEIVERS.get(location.toString())) != null) {
+diff --git a/java/org/leavesmc/leaves/protocol/core/invoker/InitInvokerHolder.java b/java/org/leavesmc/leaves/protocol/core/invoker/InitInvokerHolder.java
+index 128aaf8eb731560b5bbb5eafa4033d15fa0b7a9a..da8b245d46c1077e4ba1e03790ab3b1bae6f0434 100644
+--- a/java/org/leavesmc/leaves/protocol/core/invoker/InitInvokerHolder.java
++++ b/java/org/leavesmc/leaves/protocol/core/invoker/InitInvokerHolder.java
+@@ -11,6 +11,6 @@ public class InitInvokerHolder extends AbstractInvokerHolder<ProtocolHandler.Ini
+     }
+ 
+     public void invoke() {
+-        invoke0(true);
++        invoke0(false);
+     }
+ }
+diff --git a/java/org/leavesmc/leaves/protocol/jade/JadeProtocol.java b/java/org/leavesmc/leaves/protocol/jade/JadeProtocol.java
+index f66c79752f655e59f487dd26cb4efa4055b068d7..f4bddbb2a72acfaacece79face467c1cae2b4a54 100644
+--- a/java/org/leavesmc/leaves/protocol/jade/JadeProtocol.java
++++ b/java/org/leavesmc/leaves/protocol/jade/JadeProtocol.java
+@@ -250,6 +250,10 @@ public class JadeProtocol implements LeavesProtocol {
+ 
+     @ProtocolHandler.ReloadServer
+     public static void onServerReload() {
++        if (priorities == null) {
++            init();
++            return;
++        }
+         rebuildShearableBlocks();
+         for (ServerPlayer player : enabledPlayers) {
+             ProtocolUtils.sendPayloadPacket(player, new ServerHandshakePayload(Collections.emptyMap(), shearableBlocks, blockDataProviders.mappedIds(), entityDataProviders.mappedIds()));
