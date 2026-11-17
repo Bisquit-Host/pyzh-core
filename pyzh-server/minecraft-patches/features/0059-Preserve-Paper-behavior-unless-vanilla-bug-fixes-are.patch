@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:40:49 +0300
+Subject: [PATCH] Preserve Paper behavior unless vanilla bug fixes are enabled
+
+Gate six Leaf fixes independently. Use runtime copper sounds so configuration reloads apply, and only copy crafted results when their statistics fix is enabled.
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 4ac2a6cedf78f7c3e1f7fde7f5492915aab6402d..59118a587bf7c632d309ebaba909d39afc9329f9 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -801,7 +801,9 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+ 
+         super.remove(reason, eventCause); // CraftBukkit
+         this.brain.clearMemories();
+-        this.combatTracker.resetCombatState(); // Leaf - Fix MC-298464
++        if (org.dreeam.leaf.config.modules.fixes.MCBugFix.mc298464) {
++            this.combatTracker.resetCombatState(); // Leaf - Fix MC-298464
++        }
+     }
+ 
+     @Override
+@@ -945,7 +947,12 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+             this.getAttribute(Attributes.MAX_HEALTH).setBaseValue(maxHealth);
+         });
+         // CraftBukkit end
+-        this.setHealth(input.getFloatOr("Health", this.getMaxHealth()), true); // Leaf - Fix MC-17876
++        float health = input.getFloatOr("Health", this.getMaxHealth());
++        if (org.dreeam.leaf.config.modules.fixes.MCBugFix.mc17876) {
++            this.setHealth(health, true); // Leaf - Fix MC-17876
++        } else {
++            this.setHealth(health);
++        }
+         this.hurtTime = input.getShortOr("HurtTime", (short)0);
+         this.deathTime = input.getShortOr("DeathTime", (short)0);
+         input.getString("Team").ifPresent(teamName -> {
+diff --git a/net/minecraft/world/entity/animal/turtle/Turtle.java b/net/minecraft/world/entity/animal/turtle/Turtle.java
+index bbe0b912740c79ea9f8fad5fd5428aa0be072bb2..d1942070dd885d5c44eba11a455969e72c6d3a71 100644
+--- a/net/minecraft/world/entity/animal/turtle/Turtle.java
++++ b/net/minecraft/world/entity/animal/turtle/Turtle.java
+@@ -575,10 +575,10 @@ public class Turtle extends Animal {
+                     this.mob.setYRot(this.rotlerp(this.mob.getYRot(), yRotD, 90.0F));
+                     this.mob.yBodyRot = this.mob.getYRot();
+                     // Leaf start - Fix MC-299642
+-                    if (!this.mob.isNoGravity() || this.mob.isInWater()) {
+-                    float targetSpeed = (float)(this.getSpeedModifier() * this.mob.getAttributeValue(Attributes.MOVEMENT_SPEED)); // Purpur - Ridables
+-                    this.mob.setSpeed(Mth.lerp(0.125F, this.mob.getSpeed(), targetSpeed));
+-                    this.mob.setDeltaMovement(this.mob.getDeltaMovement().add(0.0, this.mob.getSpeed() * yd * 0.1, 0.0));
++                    if (!org.dreeam.leaf.config.modules.fixes.MCBugFix.mc299642 || !this.mob.isNoGravity() || this.mob.isInWater()) {
++                        float targetSpeed = (float)(this.getSpeedModifier() * this.mob.getAttributeValue(Attributes.MOVEMENT_SPEED)); // Purpur - Ridables
++                        this.mob.setSpeed(Mth.lerp(0.125F, this.mob.getSpeed(), targetSpeed));
++                        this.mob.setDeltaMovement(this.mob.getDeltaMovement().add(0.0, this.mob.getSpeed() * yd * 0.1, 0.0));
+                     } else {
+                         this.mob.setSpeed(0.0F);
+                     }
+diff --git a/net/minecraft/world/entity/monster/zombie/ZombieVillager.java b/net/minecraft/world/entity/monster/zombie/ZombieVillager.java
+index d89a83e8e6fb994982623952af9da90719e1abee..898159fcbd4005d3b6ee8f913162a0b9f5a2281e 100644
+--- a/net/minecraft/world/entity/monster/zombie/ZombieVillager.java
++++ b/net/minecraft/world/entity/monster/zombie/ZombieVillager.java
+@@ -347,7 +347,7 @@ public class ZombieVillager extends Zombie implements VillagerDataHolder {
+                     level.levelEvent(null, LevelEvent.SOUND_ZOMBIE_CONVERTED, this.blockPosition(), 0);
+                 }
+                 // Leaf start - Fix MC-200418
+-                if (villager.isPassenger() && villager.getVehicle() instanceof net.minecraft.world.entity.animal.chicken.Chicken && villager.isBaby()) {
++                if (org.dreeam.leaf.config.modules.fixes.MCBugFix.mc200418 && villager.isPassenger() && villager.getVehicle() instanceof net.minecraft.world.entity.animal.chicken.Chicken && villager.isBaby()) {
+                     villager.removeVehicle();
+                 }
+                 // Leaf end - Fix MC-200418
+diff --git a/net/minecraft/world/inventory/ItemCombinerMenu.java b/net/minecraft/world/inventory/ItemCombinerMenu.java
+index 8fb0cc1c914ba03730b113acc176305c46a9b29c..bee472a130eb3774c22abc6fb33e91eca6491e1a 100644
+--- a/net/minecraft/world/inventory/ItemCombinerMenu.java
++++ b/net/minecraft/world/inventory/ItemCombinerMenu.java
+@@ -124,7 +124,7 @@ public abstract class ItemCombinerMenu extends AbstractContainerMenu {
+         if (slot != null && slot.hasItem()) {
+             ItemStack stack = slot.getItem();
+             clicked = stack.copy();
+-            ItemStack clickedCopy = clicked.copy(); // Leaf - Fix MC-65198
++            ItemStack crafted = org.dreeam.leaf.config.modules.fixes.MCBugFix.mc65198 ? clicked.copy() : stack; // Leaf - Fix MC-65198
+             int inventorySlotStart = this.getInventorySlotStart();
+             int useRowSlotEnd = this.getUseRowEnd();
+             if (slotIndex == this.getResultSlot()) {
+@@ -162,7 +162,7 @@ public abstract class ItemCombinerMenu extends AbstractContainerMenu {
+             }
+ 
+             this.activeQuickItem = clicked; // Purpur - Anvil API
+-            slot.onTake(player, clickedCopy); // Leaf - Fix MC-65198
++            slot.onTake(player, crafted); // Leaf - Fix MC-65198
+             this.activeQuickItem = null; // Purpur - Anvil API
+         }
+ 
+diff --git a/net/minecraft/world/inventory/ResultSlot.java b/net/minecraft/world/inventory/ResultSlot.java
+index 0b082799e1310660bf9488e0613b85748dde4a31..1e0b64d9dc60ce537a7730218482a24986cdaac5 100644
+--- a/net/minecraft/world/inventory/ResultSlot.java
++++ b/net/minecraft/world/inventory/ResultSlot.java
+@@ -61,7 +61,7 @@ public class ResultSlot extends Slot {
+     @Override
+     protected void checkTakeAchievements(final ItemStack carried) {
+         if (this.removeCount > 0) {
+-            carried.onCraftedBy(this.player, carried.getCount()); // Leaf - Fix MC-65198
++            carried.onCraftedBy(this.player, org.dreeam.leaf.config.modules.fixes.MCBugFix.mc65198 ? carried.getCount() : this.removeCount); // Leaf - Fix MC-65198
+         }
+ 
+         if (this.container instanceof RecipeCraftingHolder recipeCraftingHolder) {
+diff --git a/net/minecraft/world/inventory/StonecutterMenu.java b/net/minecraft/world/inventory/StonecutterMenu.java
+index 215ce6e377c2458700da103a7b6ee3dde8141165..6f780d414e350f3f6ed4b9dfbf53ed24cb527869 100644
+--- a/net/minecraft/world/inventory/StonecutterMenu.java
++++ b/net/minecraft/world/inventory/StonecutterMenu.java
+@@ -238,7 +238,7 @@ public class StonecutterMenu extends AbstractContainerMenu {
+             ItemStack stack = slot.getItem();
+             Item item = stack.getItem();
+             clicked = stack.copy();
+-            ItemStack clickedCopy = clicked.copy(); // Leaf - Fix MC-65198
++            ItemStack crafted = org.dreeam.leaf.config.modules.fixes.MCBugFix.mc65198 ? clicked.copy() : stack; // Leaf - Fix MC-65198
+             if (slotIndex == 1) {
+                 item.onCraftedBy(stack, player);
+                 if (!this.moveItemStackTo(stack, 2, 38, true)) {
+@@ -271,7 +271,7 @@ public class StonecutterMenu extends AbstractContainerMenu {
+                 return ItemStack.EMPTY;
+             }
+ 
+-            slot.onTake(player, clickedCopy); // Leaf - Fix MC-65198
++            slot.onTake(player, crafted); // Leaf - Fix MC-65198
+             if (slotIndex == 1) {
+                 player.drop(stack, false);
+             }
+diff --git a/net/minecraft/world/level/block/Blocks.java b/net/minecraft/world/level/block/Blocks.java
+index 62f777513ea4547d0ccf64dfc9f473f9ec1d24ec..971a76d057c9da204872a58ae2f91d5a37d7ba49 100644
+--- a/net/minecraft/world/level/block/Blocks.java
++++ b/net/minecraft/world/level/block/Blocks.java
+@@ -5684,11 +5684,16 @@ public class Blocks {
+     );
+     public static final Block RAW_COPPER_BLOCK = register(
+         BlockItemIds.RAW_COPPER_BLOCK,
++        p -> new Block(p) {
++            @Override
++            protected SoundType getSoundType(final BlockState state) {
++                return org.dreeam.leaf.config.modules.fixes.MCBugFix.mc223153 ? SoundType.COPPER : super.getSoundType(state);
++            }
++        },
+         BlockBehaviour.Properties.of()
+             .mapColor(MapColor.COLOR_ORANGE)
+             .instrument(NoteBlockInstrument.BASEDRUM)
+             .requiresCorrectToolForDrops()
+-            .sound(SoundType.COPPER) // Leaf - Fix MC-223153
+             .strength(5.0F, 6.0F)
+     );
+     public static final Block RAW_GOLD_BLOCK = register(

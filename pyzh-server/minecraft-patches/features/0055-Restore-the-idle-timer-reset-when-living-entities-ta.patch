@@ -1,0 +1,21 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:40:21 +0300
+Subject: [PATCH] Restore the idle timer reset when living entities take damage
+
+Keep the Paper idle timer reset after the Purpur damage override so hurt mobs retain normal despawn and AI timing.
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index ed86146aa8a58d7af68f800897297b79180a401c..8a6ab6f9d62de11f32db9905eac70ad3631b6c32 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -1553,7 +1553,8 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+                 }
+             }
+         }
+-        // Purpur end - One Punch Man!this.noActionTime = 0;
++        // Purpur end - One Punch Man!
++        this.noActionTime = 0;
+         if (damage < 0.0F) {
+             damage = 0.0F;
+         }

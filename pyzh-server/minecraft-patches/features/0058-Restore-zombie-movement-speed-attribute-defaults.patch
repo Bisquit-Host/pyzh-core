@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:40:21 +0300
+Subject: [PATCH] Restore zombie movement speed attribute defaults
+
+Keep the Paper supplier values for attribute resets and default attribute APIs while retaining configurable instance initialization.
+
+diff --git a/net/minecraft/world/entity/monster/zombie/Zombie.java b/net/minecraft/world/entity/monster/zombie/Zombie.java
+index 77610177a3b865516973c1cf3b4ce2bb0b76086e..9a37f64dab87d5b9aae68c38d0d8c4063dfee153 100644
+--- a/net/minecraft/world/entity/monster/zombie/Zombie.java
++++ b/net/minecraft/world/entity/monster/zombie/Zombie.java
+@@ -212,7 +212,7 @@ public class Zombie extends Monster {
+     public static AttributeSupplier.Builder createAttributes() {
+         return Monster.createMonsterAttributes()
+             .add(Attributes.FOLLOW_RANGE, 35.0)
+-            //.add(Attributes.MOVEMENT_SPEED, 0.23F) // Leaf - Configurable movement speed of more entities - zombie
++            .add(Attributes.MOVEMENT_SPEED, 0.23F)
+             .add(Attributes.ATTACK_DAMAGE, 3.0)
+             .add(Attributes.ARMOR, 2.0)
+             .add(Attributes.SPAWN_REINFORCEMENTS_CHANCE);
+diff --git a/net/minecraft/world/entity/monster/zombie/ZombifiedPiglin.java b/net/minecraft/world/entity/monster/zombie/ZombifiedPiglin.java
+index ea18536caf8c3038539dc09b0d75da2177897db2..54612f4da33b63416777a12cb55ac3ab3b79ef81 100644
+--- a/net/minecraft/world/entity/monster/zombie/ZombifiedPiglin.java
++++ b/net/minecraft/world/entity/monster/zombie/ZombifiedPiglin.java
+@@ -150,7 +150,7 @@ public class ZombifiedPiglin extends Zombie implements NeutralMob {
+     public static AttributeSupplier.Builder createAttributes() {
+         return Zombie.createAttributes()
+             .add(Attributes.SPAWN_REINFORCEMENTS_CHANCE, 0.0)
+-            //.add(Attributes.MOVEMENT_SPEED, 0.23F) // Leaf - Configurable movement speed of more entities - zombie
++            .add(Attributes.MOVEMENT_SPEED, 0.23F)
+             .add(Attributes.ATTACK_DAMAGE, 5.0);
+     }
+ 
