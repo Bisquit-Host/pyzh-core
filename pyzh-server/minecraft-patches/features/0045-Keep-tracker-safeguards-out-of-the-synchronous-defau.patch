@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:45:06 +0300
+Subject: [PATCH] Keep tracker safeguards out of the synchronous default path
+
+Report viewers removed by updatePlayerMulti so the tracker tick republishes the observer snapshot after removal-only changes. Apply the extra environment invalidation and trader effect checks only with the async tracker enabled.
+
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index 3706f0b352c376d9573a656c2a74d9e862bcc06d..29e5df9d29b3e97b2ccc6ee4a6cb1bde9212e1b1 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -1650,7 +1650,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+                         return true;
+                     }
+                 } else {
+-                    this.removePlayerMulti(player);
++                    return this.removePlayerMulti(player);
+                 }
+             }
+             return false;
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index fb00b6c85e05be5e6183102ec311909020d52bce..8e4a6452780b0339e660ab5858c14014c3268210 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -1211,7 +1211,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+ 
+         this.debugSynchronizers.tick(this.server.debugSubscribers());
+         profiler.pop();
+-        this.environmentAttributes().invalidateTickCache();
++        if (org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled) this.environmentAttributes().invalidateTickCache();
+         if (org.dreeam.leaf.config.modules.opt.DespawnTime.proactiveWeakLoading) this.moonrise$getEntityLookup().leaf$tickWeakEntities(); // Leaf - Rewrite entity despawn time
+         if (org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled) { this.leaf$asyncTracker.onEntitiesTickEnd(); } // Leaf - Multithreaded tracker
+     }
+diff --git a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTrader.java b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTrader.java
+index 522ac8bbf4190ba2b3e5f3e53bd793a714b2608c..304d1e54c5e37b101fa66010d2bebdbd53fc11f6 100644
+--- a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTrader.java
++++ b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTrader.java
+@@ -122,14 +122,14 @@ public class WanderingTrader extends AbstractVillager implements Consumable.Over
+                     this,
+                     PotionContents.createItemStack(Items.POTION, Potions.INVISIBILITY),
+                     SoundEvents.WANDERING_TRADER_DISAPPEARED,
+-                    e -> this.canDrinkPotion && this.level().isDarkOutside() && !e.isInvisible() && !e.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY) // Paper - Add more WanderingTrader API // Leaf - Multithreaded tracker - prevents double use
++                    e -> this.canDrinkPotion && this.level().isDarkOutside() && !e.isInvisible() && (!org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled || !e.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY)) // Paper - Add more WanderingTrader API // Leaf - Multithreaded tracker - prevents double use
+                 )
+             );
+         this.goalSelector
+             .addGoal(
+                 0,
+                 new UseItemGoal<>(
+-                    this, new ItemStack(Items.MILK_BUCKET), SoundEvents.WANDERING_TRADER_REAPPEARED, e -> level().purpurConfig.milkClearsBeneficialEffects && this.canDrinkMilk && this.level().isBrightOutside() && e.isInvisible() && e.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY) // Paper - Add more WanderingTrader API // Purpur - Milk Keeps Beneficial Effects // Leaf - Multithreaded tracker - prevents double use
++                    this, new ItemStack(Items.MILK_BUCKET), SoundEvents.WANDERING_TRADER_REAPPEARED, e -> level().purpurConfig.milkClearsBeneficialEffects && this.canDrinkMilk && this.level().isBrightOutside() && e.isInvisible() && (!org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled || e.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY)) // Paper - Add more WanderingTrader API // Purpur - Milk Keeps Beneficial Effects // Leaf - Multithreaded tracker - prevents double use
+                 )
+             );
+         this.goalSelector.addGoal(1, new TradeWithPlayerGoal(this));

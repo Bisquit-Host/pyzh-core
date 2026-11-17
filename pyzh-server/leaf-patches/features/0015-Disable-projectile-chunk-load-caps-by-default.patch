@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:44:52 +0300
+Subject: [PATCH] Disable projectile chunk-load caps by default
+
+Keep the optional caps available while restoring unrestricted Paper projectile movement under the default configuration.
+
+diff --git a/java/org/galemc/gale/configuration/GaleWorldConfiguration.java b/java/org/galemc/gale/configuration/GaleWorldConfiguration.java
+index 0eced8c576743369bbf26790d3a3fe1b63c36e4e..a5d4119e39a3ae9dd4dbaf45519588f03b24f33a 100644
+--- a/java/org/galemc/gale/configuration/GaleWorldConfiguration.java
++++ b/java/org/galemc/gale/configuration/GaleWorldConfiguration.java
+@@ -43,12 +43,12 @@ public class GaleWorldConfiguration extends ConfigurationPart {
+ 
+         public class MaxProjectileChunkLoads extends ConfigurationPart {
+ 
+-            public int perTick = 10;
++            public int perTick = -1;
+ 
+             public PerProjectile perProjectile;
+ 
+             public class PerProjectile extends ConfigurationPart {
+-                public int max = 10;
++                public int max = -1;
+                 public boolean resetMovementAfterReachLimit = false;
+                 public boolean removeFromWorldAfterReachLimit = false;
+             }
