@@ -1,0 +1,173 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:43:16 +0300
+Subject: [PATCH] Cache structural noise hashes
+
+Cache structural hashes lazily with a volatile initialized flag that also caches zero. Hash and compare Perlin's existing immutable sampling amplitudes array without copying the mutable parameter list.
+
+diff --git a/net/minecraft/world/level/levelgen/synth/BlendedNoise.java b/net/minecraft/world/level/levelgen/synth/BlendedNoise.java
+index e40fa63754906f7e54f73730d43e7e94c9291b39..96831644e927edd232584745398fa30ec5c08257 100644
+--- a/net/minecraft/world/level/levelgen/synth/BlendedNoise.java
++++ b/net/minecraft/world/level/levelgen/synth/BlendedNoise.java
+@@ -36,6 +36,8 @@ public class BlendedNoise implements DensityFunction.SimpleFunction {
+     private final double maxValue;
+     private final double xzScale;
+     private final double yScale;
++    private int cachedHashCode;
++    private volatile boolean hashCodeInitialized;
+ 
+     public static BlendedNoise createUnseeded(
+         final double xzScale, final double yScale, final double xzFactor, final double yFactor, final double smearScaleMultiplier
+@@ -172,6 +174,9 @@ public class BlendedNoise implements DensityFunction.SimpleFunction {
+ 
+     @Override
+     public int hashCode() {
++        if (this.hashCodeInitialized) {
++            return this.cachedHashCode;
++        }
+         int result = 1;
+ 
+         result = 31 * result + java.util.Objects.hashCode(this.minLimitNoise);
+@@ -183,6 +188,8 @@ public class BlendedNoise implements DensityFunction.SimpleFunction {
+         result = 31 * result + Double.hashCode(this.yFactor);
+         result = 31 * result + Double.hashCode(this.smearScaleMultiplier);
+ 
++        this.cachedHashCode = result;
++        this.hashCodeInitialized = true;
+         return result;
+     }
+     // Leaf end - C2ME - DensityFunction compiler
+diff --git a/net/minecraft/world/level/levelgen/synth/ImprovedNoise.java b/net/minecraft/world/level/levelgen/synth/ImprovedNoise.java
+index 8ae8c9b6ee5d7de341015ba3615d46e82f25ade1..6e4fa98f697909a025a417d32871ede6edb2ed55 100644
+--- a/net/minecraft/world/level/levelgen/synth/ImprovedNoise.java
++++ b/net/minecraft/world/level/levelgen/synth/ImprovedNoise.java
+@@ -10,6 +10,8 @@ public final class ImprovedNoise {
+     public final double xo;
+     public final double yo;
+     public final double zo;
++    private int cachedHashCode;
++    private volatile boolean hashCodeInitialized;
+ 
+     // Gale start - C2ME - optimize noise generation
+     private static final double[] FLAT_SIMPLEX_GRAD = new double[]{
+@@ -239,6 +241,9 @@ public final class ImprovedNoise {
+ 
+     @Override
+     public int hashCode() {
++        if (this.hashCodeInitialized) {
++            return this.cachedHashCode;
++        }
+         int result = 1;
+ 
+         result = 31 * result + java.util.Arrays.hashCode(this.p);
+@@ -246,6 +251,8 @@ public final class ImprovedNoise {
+         result = 31 * result + Double.hashCode(this.yo);
+         result = 31 * result + Double.hashCode(this.zo);
+ 
++        this.cachedHashCode = result;
++        this.hashCodeInitialized = true;
+         return result;
+     }
+     // Leaf end - C2ME - DensityFunction compiler
+diff --git a/net/minecraft/world/level/levelgen/synth/NormalNoise.java b/net/minecraft/world/level/levelgen/synth/NormalNoise.java
+index 536caddb9daedff5f034a0bb974f8e458a873485..b37a2bedb58dcc30d4e74e0cdde73b18cc18c155 100644
+--- a/net/minecraft/world/level/levelgen/synth/NormalNoise.java
++++ b/net/minecraft/world/level/levelgen/synth/NormalNoise.java
+@@ -21,6 +21,8 @@ public class NormalNoise {
+     private final PerlinNoise second;
+     private final double maxValue;
+     private final NormalNoise.NoiseParameters parameters;
++    private int cachedHashCode;
++    private volatile boolean hashCodeInitialized;
+ 
+     @Deprecated
+     public static NormalNoise createLegacyNetherBiome(final RandomSource random, final NormalNoise.NoiseParameters parameters) {
+@@ -96,12 +98,17 @@ public class NormalNoise {
+ 
+     @Override
+     public int hashCode() {
++        if (this.hashCodeInitialized) {
++            return this.cachedHashCode;
++        }
+         int result = 1;
+ 
+         result = 31 * result + Double.hashCode(this.valueFactor);
+         result = 31 * result + java.util.Objects.hashCode(this.first);
+         result = 31 * result + java.util.Objects.hashCode(this.second);
+ 
++        this.cachedHashCode = result;
++        this.hashCodeInitialized = true;
+         return result;
+     }
+     // Leaf end - C2ME - DensityFunction compiler
+diff --git a/net/minecraft/world/level/levelgen/synth/PerlinNoise.java b/net/minecraft/world/level/levelgen/synth/PerlinNoise.java
+index 11462b2f402ab13795dffc25f4656e056e06d577..76e8da6f4d50abdf9aa375901a39ba0819007e54 100644
+--- a/net/minecraft/world/level/levelgen/synth/PerlinNoise.java
++++ b/net/minecraft/world/level/levelgen/synth/PerlinNoise.java
+@@ -27,6 +27,8 @@ public class PerlinNoise {
+     private final double lowestFreqInputFactor;
+     private final double maxValue;
+     private final double [] amplitudesArray; // Gale - C2ME - optimize noise generation
++    private int cachedHashCode;
++    private volatile boolean hashCodeInitialized;
+ 
+     @Deprecated
+     public static PerlinNoise createLegacyForBlendedNoise(final RandomSource random, final IntStream octaves) {
+@@ -229,18 +231,23 @@ public class PerlinNoise {
+         return Double.compare(this.lowestFreqValueFactor, that.lowestFreqValueFactor) == 0
+             && Double.compare(this.lowestFreqInputFactor, that.lowestFreqInputFactor) == 0
+             && Arrays.equals(this.noiseLevels, that.noiseLevels)
+-            && Arrays.equals(this.amplitudes.toDoubleArray(), that.amplitudes.toDoubleArray());
++            && Arrays.equals(this.amplitudesArray, that.amplitudesArray);
+     }
+ 
+     @Override
+     public int hashCode() {
++        if (this.hashCodeInitialized) {
++            return this.cachedHashCode;
++        }
+         int result = 1;
+ 
+         result = 31 * result + Arrays.hashCode(this.noiseLevels);
+-        result = 31 * result + Arrays.hashCode(this.amplitudes.toDoubleArray());
++        result = 31 * result + Arrays.hashCode(this.amplitudesArray);
+         result = 31 * result + Double.hashCode(this.lowestFreqValueFactor);
+         result = 31 * result + Double.hashCode(this.lowestFreqInputFactor);
+ 
++        this.cachedHashCode = result;
++        this.hashCodeInitialized = true;
+         return result;
+     }
+     // Leaf end - C2ME - DensityFunction compiler
+diff --git a/net/minecraft/world/level/levelgen/synth/SimplexNoise.java b/net/minecraft/world/level/levelgen/synth/SimplexNoise.java
+index 261ed0de50cd833455ed5c5a5bd89fe9fb11d36e..c7724ac803d892ec4259f841940fce775771d94b 100644
+--- a/net/minecraft/world/level/levelgen/synth/SimplexNoise.java
++++ b/net/minecraft/world/level/levelgen/synth/SimplexNoise.java
+@@ -29,6 +29,8 @@ public class SimplexNoise {
+     public final double xo;
+     public final double yo;
+     public final double zo;
++    private int cachedHashCode;
++    private volatile boolean hashCodeInitialized;
+ 
+     public SimplexNoise(final RandomSource random) {
+         this.xo = random.nextDouble() * 256.0;
+@@ -206,6 +208,9 @@ public class SimplexNoise {
+ 
+     @Override
+     public int hashCode() {
++        if (this.hashCodeInitialized) {
++            return this.cachedHashCode;
++        }
+         int result = 1;
+ 
+         result = 31 * result + java.util.Arrays.hashCode(this.p);
+@@ -213,6 +218,8 @@ public class SimplexNoise {
+         result = 31 * result + Double.hashCode(this.yo);
+         result = 31 * result + Double.hashCode(this.zo);
+ 
++        this.cachedHashCode = result;
++        this.hashCodeInitialized = true;
+         return result;
+     }
+     // Leaf end - C2ME - DensityFunction compiler
