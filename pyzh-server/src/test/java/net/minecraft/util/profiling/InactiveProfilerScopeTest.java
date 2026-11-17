@@ -3,6 +3,7 @@ package net.minecraft.util.profiling;
 import java.lang.reflect.Field;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.bukkit.support.environment.LeafTest;
+import org.dreeam.leaf.config.modules.opt.VanillaDebugTools;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -20,6 +21,8 @@ class InactiveProfilerScopeTest {
         field.setAccessible(true);
         final AtomicInteger count = (AtomicInteger) field.get(null);
         final int before = count.get();
+        final boolean profilerEnabled = VanillaDebugTools.profilerEnabled;
+        VanillaDebugTools.profilerEnabled = true;
         try (final Profiler.Scope ignored = Profiler.use(InactiveProfiler.INSTANCE)) {
             assertEquals(before, count.get());
             assertSame(InactiveProfiler.INSTANCE, Profiler.get());
@@ -43,6 +46,8 @@ class InactiveProfilerScopeTest {
             assertEquals(null, failure.get());
             assertEquals(before, count.get());
             assertSame(InactiveProfiler.INSTANCE, Profiler.get());
+        } finally {
+            VanillaDebugTools.profilerEnabled = profilerEnabled;
         }
         assertEquals(before, count.get());
     }

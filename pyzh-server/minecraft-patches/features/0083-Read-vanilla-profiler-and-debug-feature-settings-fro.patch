@@ -1,0 +1,136 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 17 Nov 2026 21:46:30 +0300
+Subject: [PATCH] Read vanilla profiler and debug feature settings from config
+
+/debug start, /debug stop and /perf point to the config option instead
+of the removed system property.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 09cc26d4043a69c47859d2b87aaeb3997fc7181a..b2862b39131da1d6632799f9c233bb02267b77ab 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1479,7 +1479,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+ 
+                 // Paper - improve tick loop - done above
+ 
+-                try (Profiler.Scope ignored = org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_PROFILER ? null : Profiler.use(this.createProfiler())) { // Leaf - Configurable vanilla profiler
++                try (Profiler.Scope ignored = org.dreeam.leaf.config.modules.opt.VanillaDebugTools.profilerEnabled ? Profiler.use(this.createProfiler()) : null) { // Leaf - Configurable vanilla profiler
+                     this.processPacketsAndTick(sprinting);
+                     ProfilerFiller profiler = Profiler.get();
+                     profiler.push("nextTickWait");
+@@ -2091,7 +2091,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         profiler.popPush("players");
+         this.playerList.tick();
+         profiler.popPush("debugSubscribers");
+-        if (!org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_DEBUG_FEATURE) this.debugSubscribers.tick(); // Leaf - Reduce debug subscribers overhead
++        if (org.dreeam.leaf.config.modules.opt.VanillaDebugTools.debugFeaturesEnabled) this.debugSubscribers.tick(); // Leaf - Reduce debug subscribers overhead
+         if (this.tickRateManager.runsNormally()) {
+             profiler.popPush("gameTests");
+             GameTestTicker.SINGLETON.tick();
+diff --git a/net/minecraft/server/ReloadableServerResources.java b/net/minecraft/server/ReloadableServerResources.java
+index 948bf1c36dffeb7de412d8bd981090c516725eeb..49d02cc5d5c9258e6e151dbf53eeab86a0cb06a2 100644
+--- a/net/minecraft/server/ReloadableServerResources.java
++++ b/net/minecraft/server/ReloadableServerResources.java
+@@ -115,7 +115,7 @@ public class ReloadableServerResources {
+                                     backgroundExecutor,
+                                     mainThreadExecutor,
+                                     DATA_RELOAD_INITIAL_TASK,
+-                                    !org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_PROFILER // Leaf - Configurable vanilla profiler
++                                    org.dreeam.leaf.config.modules.opt.VanillaDebugTools.profilerEnabled // Leaf - Configurable vanilla profiler
+                                 )
+                                 .done()
+                                 .thenApply(ignore -> result);
+diff --git a/net/minecraft/server/commands/DebugCommand.java b/net/minecraft/server/commands/DebugCommand.java
+index e543a4bfd67b2a2ed4ed06285525f21587670f05..016457b6bf9fcc333b78724f7ce1cc39c6c5f27a 100644
+--- a/net/minecraft/server/commands/DebugCommand.java
++++ b/net/minecraft/server/commands/DebugCommand.java
+@@ -103,12 +103,11 @@ public class DebugCommand {
+ 
+     // Leaf start - Configurable vanilla profiler
+     public static boolean showRemovalWarning(final CommandSourceStack source, final String command) {
+-        if (org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_PROFILER) {
++        if (!org.dreeam.leaf.config.modules.opt.VanillaDebugTools.profilerEnabled) {
+             net.kyori.adventure.text.minimessage.MiniMessage mm = net.kyori.adventure.text.minimessage.MiniMessage.miniMessage();
+ 
+             source.getSender().sendMessage(mm.deserialize("<gold>/" + command + " command is unavailable, since Minecraft's vanilla profiler has been disabled."));
+-            source.getSender().sendMessage(mm.deserialize("<gold>Please use <click:suggest_command:'/spark'><grey>/spark</grey></click> instead, or check Leaf docs for more information:"));
+-            source.getSender().sendMessage(mm.deserialize("<gold><click:open_url:'" + org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_PROFILER_DOCS_URL + "'>" + org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_PROFILER_DOCS_URL + "</click>"));
++            source.getSender().sendMessage(mm.deserialize("<gold>Please use <click:suggest_command:'/spark'><grey>/spark</grey></click> instead, or set <grey>performance.vanilla-profiler.enabled</grey> to true in leaf-global.yml and restart."));
+ 
+             return true;
+         }
+diff --git a/net/minecraft/server/packs/resources/ReloadableResourceManager.java b/net/minecraft/server/packs/resources/ReloadableResourceManager.java
+index 5adc89ce571b9e1514c94a21d12ef4a53bee0c26..b7181b538f677fcc7d5f9bd7110c638b95ba8351 100644
+--- a/net/minecraft/server/packs/resources/ReloadableResourceManager.java
++++ b/net/minecraft/server/packs/resources/ReloadableResourceManager.java
+@@ -46,7 +46,7 @@ public class ReloadableResourceManager implements AutoCloseable, ResourceManager
+         LOGGER.info("Reloading ResourceManager: {}", LogUtils.defer(() -> resourcePacks.stream().map(PackResources::packId).collect(Collectors.joining(", "))));
+         this.resources.close();
+         this.resources = new MultiPackResourceManager(this.type, resourcePacks);
+-        return SimpleReloadInstance.create(this.resources, this.listeners, backgroundExecutor, mainThreadExecutor, initialTask, !org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_PROFILER); // Leaf - Configurable vanilla profiler
++        return SimpleReloadInstance.create(this.resources, this.listeners, backgroundExecutor, mainThreadExecutor, initialTask, org.dreeam.leaf.config.modules.opt.VanillaDebugTools.profilerEnabled); // Leaf - Configurable vanilla profiler
+     }
+ 
+     @Override
+diff --git a/net/minecraft/util/debug/ServerDebugSubscribers.java b/net/minecraft/util/debug/ServerDebugSubscribers.java
+index 79019d6e8eb4ae53a394313d763670305bb914f8..ddcc96a660378856840b067da4aa6fe66eb69e28 100644
+--- a/net/minecraft/util/debug/ServerDebugSubscribers.java
++++ b/net/minecraft/util/debug/ServerDebugSubscribers.java
+@@ -25,12 +25,12 @@ public class ServerDebugSubscribers {
+     }
+ 
+     private List<ServerPlayer> getSubscribersFor(final DebugSubscription<?> subscription) {
+-        if (org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_DEBUG_FEATURE) return EMPTY_PLAYERS; // Leaf - Reduce debug subscribers overhead
++        if (!org.dreeam.leaf.config.modules.opt.VanillaDebugTools.debugFeaturesEnabled) return EMPTY_PLAYERS; // Leaf - Reduce debug subscribers overhead
+         return this.enabledSubscriptions.getOrDefault(subscription, List.of());
+     }
+ 
+     public void tick() {
+-        if (org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_DEBUG_FEATURE || tickCount++ % 20 != 0) return; // Leaf - Reduce debug subscribers overhead
++        if (!org.dreeam.leaf.config.modules.opt.VanillaDebugTools.debugFeaturesEnabled || tickCount++ % 20 != 0) return; // Leaf - Reduce debug subscribers overhead
+         this.enabledSubscriptions.values().forEach(List::clear);
+ 
+         for (ServerPlayer player : this.server.getPlayerList().getPlayers()) {
+@@ -43,24 +43,24 @@ public class ServerDebugSubscribers {
+     }
+ 
+     public void broadcastToAll(final DebugSubscription<?> subscription, final Packet<?> packet) {
+-        if (org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_DEBUG_FEATURE) return; // Leaf - Reduce debug subscribers overhead
++        if (!org.dreeam.leaf.config.modules.opt.VanillaDebugTools.debugFeaturesEnabled) return; // Leaf - Reduce debug subscribers overhead
+         for (ServerPlayer player : this.getSubscribersFor(subscription)) {
+             player.connection.send(packet);
+         }
+     }
+ 
+     public Set<DebugSubscription<?>> enabledSubscriptions() {
+-        if (org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_DEBUG_FEATURE) return EMPTY_SUBSCRIPTIONS; // Leaf - Reduce debug subscribers overhead
++        if (!org.dreeam.leaf.config.modules.opt.VanillaDebugTools.debugFeaturesEnabled) return EMPTY_SUBSCRIPTIONS; // Leaf - Reduce debug subscribers overhead
+         return Set.copyOf(this.enabledSubscriptions.keySet());
+     }
+ 
+     public boolean hasAnySubscriberFor(final DebugSubscription<?> subscription) {
+-        if (org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_DEBUG_FEATURE) return false; // Leaf - Reduce debug subscribers overhead
++        if (!org.dreeam.leaf.config.modules.opt.VanillaDebugTools.debugFeaturesEnabled) return false; // Leaf - Reduce debug subscribers overhead
+         return !this.getSubscribersFor(subscription).isEmpty();
+     }
+ 
+     public boolean hasRequiredPermissions(final ServerPlayer player) {
+-        if (org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_DEBUG_FEATURE) return false; // Leaf - Reduce debug subscribers overhead
++        if (!org.dreeam.leaf.config.modules.opt.VanillaDebugTools.debugFeaturesEnabled) return false; // Leaf - Reduce debug subscribers overhead
+         NameAndId nameAndId = player.nameAndId();
+         return SharedConstants.IS_RUNNING_IN_IDE && this.server.isSingleplayerOwner(nameAndId) || this.server.getPlayerList().isOp(nameAndId);
+     }
+diff --git a/net/minecraft/util/profiling/Profiler.java b/net/minecraft/util/profiling/Profiler.java
+index 1ffc8f4c894971f9ef0bc4fe5b41ca931f5254c7..cc3964ebd0d5617db7fba19238fb8aaa5843a628 100644
+--- a/net/minecraft/util/profiling/Profiler.java
++++ b/net/minecraft/util/profiling/Profiler.java
+@@ -49,7 +49,7 @@ public final class Profiler {
+     }
+ 
+     public static ProfilerFiller get() {
+-        if (org.dreeam.leaf.util.LeafConstants.DISABLE_VANILLA_PROFILER) return InactiveProfiler.INSTANCE; // Leaf - Configurable vanilla profiler
++        if (!org.dreeam.leaf.config.modules.opt.VanillaDebugTools.profilerEnabled) return InactiveProfiler.INSTANCE; // Leaf - Configurable vanilla profiler
+         if (ACTIVE_PROFILER_COUNT.get() == 0 && !TracyClient.isAvailable()) {
+             return InactiveProfiler.INSTANCE;
+         }
