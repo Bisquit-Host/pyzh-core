@@ -56,7 +56,7 @@ index 0000000000000000000000000000000000000000..84f8dac478498f030ed38ff39da83260
 +}
 diff --git a/java/ru/turbovadim/pyzh/version/PyzhVersionFetcher.java b/java/ru/turbovadim/pyzh/version/PyzhVersionFetcher.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..8e1fc68cce8372b78f81d6c42c54c79d73e6bff5
+index 0000000000000000000000000000000000000000..a09a0a213fb8b27b5a2fca303177d1e06fe5ae39
 --- /dev/null
 +++ b/java/ru/turbovadim/pyzh/version/PyzhVersionFetcher.java
 @@ -0,0 +1,17 @@
@@ -68,10 +68,10 @@ index 0000000000000000000000000000000000000000..8e1fc68cce8372b78f81d6c42c54c79d
 +
 +    public PyzhVersionFetcher() {
 +        super(
-+            "https://github.com/Turbovadim/pyzh-core/releases",
++            "https://github.com/Bisquit-Host/pyzh-core/releases",
 +            "TurboVadim",
 +            "Pyzh",
-+            "Turbovadim",
++            "Bisquit-Host",
 +            "pyzh-core",
 +            ApiType.GITHUB
 +        );
