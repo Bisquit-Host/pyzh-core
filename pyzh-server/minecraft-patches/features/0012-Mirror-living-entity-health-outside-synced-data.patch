@@ -12,7 +12,7 @@ assignValues. getHealth() falls back to the synced value while the
 Entity constructor runs, before the copy is initialized.
 
 diff --git a/net/minecraft/network/syncher/SynchedEntityData.java b/net/minecraft/network/syncher/SynchedEntityData.java
-index c45b34ddd3d1e9ac8b8f9dbcbefa770618e4c2d8..da7820e97c641dde7e7f1b00c803c3a232cfc073 100644
+index 33ed3ede938b0d737db7f5302b3748a6342f6963..b4769bd6e91e20df4b586544b24e77745bff6c0a 100644
 --- a/net/minecraft/network/syncher/SynchedEntityData.java
 +++ b/net/minecraft/network/syncher/SynchedEntityData.java
 @@ -61,6 +61,7 @@ public class SynchedEntityData {
@@ -32,10 +32,10 @@ index c45b34ddd3d1e9ac8b8f9dbcbefa770618e4c2d8..da7820e97c641dde7e7f1b00c803c3a2
  
      public static class Builder {
 diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
-index 549bd2811ee8a0b46e1aae4409bc3b9d38ed90b1..9d2ed7d8cf419e4f89d2f3cd57c3d11c3088e75c 100644
+index e1a8bed3e9489ea579fc10e9c2f45e77b2521b7c..82d397d78a1a5f22963ad2db293f599ee3334a9e 100644
 --- a/net/minecraft/world/entity/LivingEntity.java
 +++ b/net/minecraft/world/entity/LivingEntity.java
-@@ -312,8 +312,23 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -311,8 +311,23 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
      protected boolean shouldBurnInDay = false; public boolean shouldBurnInDay() { return this.shouldBurnInDay; } public void setShouldBurnInDay(boolean shouldBurnInDay) { this.shouldBurnInDay = shouldBurnInDay; } // Purpur - API for any mob to burn daylight
      // CraftBukkit end
  
@@ -59,7 +59,7 @@ index 549bd2811ee8a0b46e1aae4409bc3b9d38ed90b1..9d2ed7d8cf419e4f89d2f3cd57c3d11c
          this.attributes = new AttributeMap(DefaultAttributes.getSupplier(type), this); // Purpur - Ridables
          this.initAttributes(); // Purpur - Configurable entity base attributes
          this.craftAttributes = new org.bukkit.craftbukkit.attribute.CraftAttributeMap(this.attributes); // CraftBukkit
-@@ -1443,7 +1458,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -1434,7 +1449,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
              return (float) player.getBukkitEntity().getHealth();
          }
          // CraftBukkit end

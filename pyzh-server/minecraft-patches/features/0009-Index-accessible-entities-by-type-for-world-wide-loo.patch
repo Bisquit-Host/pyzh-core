@@ -10,11 +10,11 @@ the existing accessible list under the same lock, so these lookups only
 visit entities of the requested type. Other type tests keep the scan.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
-index 75c2168451ab042c3e32001b290af9585ef8f537..78063fd1dd8856c9b8069a730915c931624957b5 100644
+index ca3413bba57675a526f00fd058940aac33b503e3..43fc44b334d8cf99531dd322d093fd9ed545e866 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
 @@ -51,6 +51,8 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
-     protected final ConcurrentChainedLong2ReferenceHashTable<Entity> entityById = new ConcurrentChainedLong2ReferenceHashTable<>();
+     protected final ConcurrentChainedInt2ReferenceHashTable<Entity> entityById = ConcurrentChainedInt2ReferenceHashTable.createWithCapacity(ConcurrentChainedInt2ReferenceHashTable.defaultCapacity(), 0.5f);
      protected final ConcurrentHashMap<UUID, Entity> entityByUUID = new ConcurrentHashMap<>();
      protected final EntityList accessibleEntities = new EntityList();
 +    // Pyzh - Guarded by accessibleEntities. Lets typed world-wide lookups such as @e[type=...] skip other entity types.

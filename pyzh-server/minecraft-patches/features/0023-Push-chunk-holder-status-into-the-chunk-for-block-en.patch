@@ -16,7 +16,7 @@ LevelChunk.getBlockEntity also skips the captured block entity map when
 nothing is captured, as Level.getBlockEntity already does.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
-index 0ca348d43143d11ba6dd0e6df33b5ee90ad8c381..b2ca6660852eefa10c4b04894262cd6924fe7bfa 100644
+index 9cae30aa0576c49fcdf7020eab0836bcba560daf..be265b82b8ef69daec4da4cfe63a7481c5fb3f10 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/NewChunkHolder.java
 @@ -1192,6 +1192,7 @@ public final class NewChunkHolder {
@@ -28,7 +28,7 @@ index 0ca348d43143d11ba6dd0e6df33b5ee90ad8c381..b2ca6660852eefa10c4b04894262cd69
  
      // only to be called on the main thread, no locks need to be held
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkFullTask.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkFullTask.java
-index 96ccb8f657d755b2e58a8dd0cda00ca0df4886b2..ece80570cf4a36bfee030a4b8e749661468a2cbc 100644
+index f41b3247df8c3e088f253d40a333fac73cfd54e3..6537495dd30fcb7c4bda5b0e3e595c4a2c62d672 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkFullTask.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/task/ChunkFullTask.java
 @@ -74,7 +74,7 @@ public final class ChunkFullTask extends ChunkProgressionTask implements Runnabl
@@ -39,12 +39,12 @@ index 96ccb8f657d755b2e58a8dd0cda00ca0df4886b2..ece80570cf4a36bfee030a4b8e749661
 +            chunk.pyzh$setFullStatusHolder(chunkHolder); // Pyzh - Push chunk holder status into the chunk
              try {
                  platformHooks.setCurrentlyLoading(this.chunkHolder.vanillaChunkHolder, chunk);
-                 chunk.runPostLoad();
+                 // Unlike Vanilla, we load the entity chunk here, as we load the NBT in empty status (unlike Vanilla)
 diff --git a/net/minecraft/world/level/chunk/LevelChunk.java b/net/minecraft/world/level/chunk/LevelChunk.java
-index 83bd58a65b1b27ebddfeaf2477e00dbf6268246f..168578f988075249c377846b3fbd6cbfa9caa6cd 100644
+index 9851a60140f9989fbac317db200d8484d43ee16c..ab7b465cc14a80947bcbfc7d014b536e25f0f89f 100644
 --- a/net/minecraft/world/level/chunk/LevelChunk.java
 +++ b/net/minecraft/world/level/chunk/LevelChunk.java
-@@ -546,7 +546,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+@@ -550,7 +550,7 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
  
      public @Nullable BlockEntity getBlockEntity(final BlockPos pos, final LevelChunk.EntityCreationType creationType) {
          // CraftBukkit start
@@ -53,7 +53,7 @@ index 83bd58a65b1b27ebddfeaf2477e00dbf6268246f..168578f988075249c377846b3fbd6cbf
          if (blockEntity == null) {
              blockEntity = this.blockEntities.get(pos);
          }
-@@ -592,11 +592,19 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+@@ -596,11 +596,19 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
          return this.loaded || this.level.isClientSide();
      }
  
@@ -74,7 +74,7 @@ index 83bd58a65b1b27ebddfeaf2477e00dbf6268246f..168578f988075249c377846b3fbd6cbf
              );
      }
  
-@@ -945,12 +953,33 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+@@ -947,12 +955,33 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
      }
  
      public FullChunkStatus getFullStatus() {

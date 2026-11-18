@@ -17,10 +17,10 @@ advancement reload, which is the only time a holder's progress object
 is replaced. Results are unchanged.
 
 diff --git a/net/minecraft/advancements/AdvancementProgress.java b/net/minecraft/advancements/AdvancementProgress.java
-index 7defccef093ddfb239107e6fe8fc9693ed2ed016..2a15f113e45f9d9a62bfcfecbe64865ad3c89ddf 100644
+index b6ca9b6303a8201bdbbc7c224998fdad9dff8a4f..c8f6fb16240c3b9c8fdfe6df2cc30885d100ee31 100644
 --- a/net/minecraft/advancements/AdvancementProgress.java
 +++ b/net/minecraft/advancements/AdvancementProgress.java
-@@ -43,9 +43,16 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
+@@ -48,9 +48,16 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
      );
      private final Map<String, CriterionProgress> criteria;
      private AdvancementRequirements requirements = AdvancementRequirements.EMPTY;
@@ -37,7 +37,7 @@ index 7defccef093ddfb239107e6fe8fc9693ed2ed016..2a15f113e45f9d9a62bfcfecbe64865a
      }
  
      public AdvancementProgress() {
-@@ -61,10 +68,32 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
+@@ -66,10 +73,32 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
          }
  
          this.requirements = requirements;
@@ -72,18 +72,18 @@ index 7defccef093ddfb239107e6fe8fc9693ed2ed016..2a15f113e45f9d9a62bfcfecbe64865a
  
      public boolean hasProgress() {
 diff --git a/net/minecraft/advancements/CriterionProgress.java b/net/minecraft/advancements/CriterionProgress.java
-index d49e9dc60c3cea402c606a7523b6de6106d7baba..2764b2b80d9905bd4856aad436a3e6ca0a188cb3 100644
+index a968c8c84bd6b0618d3c5a43e3451a07401658f1..b301871276b72b9761803828598ce091464476f5 100644
 --- a/net/minecraft/advancements/CriterionProgress.java
 +++ b/net/minecraft/advancements/CriterionProgress.java
-@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
- 
- public class CriterionProgress {
+@@ -12,6 +12,7 @@ public class CriterionProgress {
+         .apply(ByteBufCodecs::optional)
+         .map(obtained -> new CriterionProgress((Instant)obtained.orElse(null)), progress -> Optional.ofNullable(progress.obtained));
      private @Nullable Instant obtained;
 +    @Nullable AdvancementProgress pyzh$owner; // Pyzh - Cache advancement completion
  
      public CriterionProgress() {
      }
-@@ -20,10 +21,22 @@ public class CriterionProgress {
+@@ -26,10 +27,22 @@ public class CriterionProgress {
  
      public void grant() {
          this.obtained = Instant.now();
@@ -130,10 +130,10 @@ index 670ed3b4d82243da61636a0a6c06b84cc6d990e3..146330284c6fa83f18574d2127b4e6f1
                      }
                  }
 diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
-index 98b48a8a6f6372114ee1f71b2c69bff97af4ef64..129a39c82fe6a7b2429b32a4f85dbf42e140b49b 100644
+index 90125eac5a8f659794bbd38b22584f68a27424e1..37ddfc2ee19b15f2a54c859bf630249868b6e62c 100644
 --- a/net/minecraft/server/PlayerAdvancements.java
 +++ b/net/minecraft/server/PlayerAdvancements.java
-@@ -61,6 +61,8 @@ public class PlayerAdvancements {
+@@ -62,6 +62,8 @@ public class PlayerAdvancements {
      private @Nullable AdvancementHolder lastSelectedTab;
      private boolean isFirstPacket = true;
      private final Codec<PlayerAdvancements.Data> codec;
@@ -142,7 +142,7 @@ index 98b48a8a6f6372114ee1f71b2c69bff97af4ef64..129a39c82fe6a7b2429b32a4f85dbf42
      private final Map<CriterionTrigger<?>, Map<PlayerAdvancements.TriggerInstanceKey, ? extends CriterionTriggerInstance>> activeTriggers = new it.unimi.dsi.fastutil.objects.Reference2ReferenceOpenHashMap<>(); // Leaf - Replace criterion map with optimized collection
  
      public PlayerAdvancements(
-@@ -86,6 +88,7 @@ public class PlayerAdvancements {
+@@ -87,6 +89,7 @@ public class PlayerAdvancements {
      public void reload(final ServerAdvancementManager manager) {
          this.clearTriggers();
          this.progress.clear();
@@ -150,7 +150,7 @@ index 98b48a8a6f6372114ee1f71b2c69bff97af4ef64..129a39c82fe6a7b2429b32a4f85dbf42
          this.visible.clear();
          this.rootsToUpdate.clear();
          this.progressChanged.clear();
-@@ -324,6 +327,22 @@ public class PlayerAdvancements {
+@@ -321,6 +324,22 @@ public class PlayerAdvancements {
          return progress;
      }
  

@@ -11,10 +11,10 @@ Both are side-effect free, so rejecting by the raw follow range first
 gives the same result.
 
 diff --git a/net/minecraft/world/entity/ai/targeting/TargetingConditions.java b/net/minecraft/world/entity/ai/targeting/TargetingConditions.java
-index a3d270f323d4d5bea09f3e502ad814ffda500c27..e9d4b6d9da4b7f685f6f398f620e6330cb00001d 100644
+index 9ba1e6220c73b41b99834e3c0381a88d53c1d92f..803e052191345cd123f0ca4bcb135d8886d6e89b 100644
 --- a/net/minecraft/world/entity/ai/targeting/TargetingConditions.java
 +++ b/net/minecraft/world/entity/ai/targeting/TargetingConditions.java
-@@ -78,19 +78,25 @@ public class TargetingConditions {
+@@ -78,20 +78,27 @@ public class TargetingConditions {
                  return false;
              }
          } else {
@@ -25,7 +25,9 @@ index a3d270f323d4d5bea09f3e502ad814ffda500c27..e9d4b6d9da4b7f685f6f398f620e6330
 +            double followRangeRaw = this.range;
 +            if (followRangeRaw > 0.0) {
 +                distanceToSqr = targeter.distanceToSqr(target.getX(), target.getY(), target.getZ());
-+                if (distanceToSqr > followRangeRaw * followRangeRaw) { // Gale - Airplane - the actual follow range will always be this value or smaller
++                // Gale - Airplane - visibility is clamped to 10 in 26.3; retain the minimum targeting distance as well.
++                double maximumVisibilityDistance = Math.max(followRangeRaw * (this.testInvisible ? net.minecraft.world.item.component.MobVisibility.MAX_VISIBILITY : 1.0), 2.0);
++                if (distanceToSqr > maximumVisibilityDistance * maximumVisibilityDistance) {
 +                    return false;
 +                }
 +            }
@@ -39,11 +41,12 @@ index a3d270f323d4d5bea09f3e502ad814ffda500c27..e9d4b6d9da4b7f685f6f398f620e6330
 -                double distanceToSqr = targeter.distanceToSqr(target.getX(), target.getY(), target.getZ());
                  // Gale start - Airplane - check targeting range before getting visibility
 -                double followRangeRaw = this.range;
--
--                if (distanceToSqr > followRangeRaw * followRangeRaw) { // the actual follow range will always be this value or smaller, so if the distance is larger then it never will return true after getting invis
+-                // Visibility is clamped to 10 in 26.3; retain the minimum targeting distance as well.
+-                double maximumVisibilityDistance = Math.max(followRangeRaw * (this.testInvisible ? net.minecraft.world.item.component.MobVisibility.MAX_VISIBILITY : 1.0), 2.0);
+-                if (distanceToSqr > maximumVisibilityDistance * maximumVisibilityDistance) {
 -                    return false;
 -                }
 -
-                 double modifier = this.testInvisible ? target.getVisibilityPercent(targeter) : 1.0;
+                 double modifier = this.testInvisible ? target.getVisibilityPercent(level, targeter) : 1.0;
                  double visibilityDistance = Math.max(followRangeRaw * modifier, 2.0);
                  // Gale end - Airplane - check targeting range before getting visibility

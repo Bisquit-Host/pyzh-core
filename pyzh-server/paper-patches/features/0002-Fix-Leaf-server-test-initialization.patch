@@ -5,10 +5,10 @@ Subject: [PATCH] Fix Leaf server test initialization
 
 
 diff --git a/src/main/java/org/bukkit/craftbukkit/legacy/CraftLegacy.java b/src/main/java/org/bukkit/craftbukkit/legacy/CraftLegacy.java
-index 0efca0e1de2d6e5d9bc33c46174973758c8cabb3..622ae94a47630da8fec1df02e5e43f314ffa20d1 100644
+index 623d4784852ba680bbc12850228774875bedeb18..7d03d33c42f0583657f34d77847ee133b18b4cb8 100644
 --- a/src/main/java/org/bukkit/craftbukkit/legacy/CraftLegacy.java
 +++ b/src/main/java/org/bukkit/craftbukkit/legacy/CraftLegacy.java
-@@ -260,7 +260,8 @@ public final class CraftLegacy {
+@@ -261,7 +261,8 @@ public final class CraftLegacy {
      }
  
      static {

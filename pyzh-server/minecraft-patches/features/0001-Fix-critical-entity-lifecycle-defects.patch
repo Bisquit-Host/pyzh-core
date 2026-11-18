@@ -6,10 +6,10 @@ Subject: [PATCH] Fix critical entity lifecycle defects
 Bound ceiling-dimension trader spawn searches and retain weak-loaded entities until removal succeeds.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
-index 2a9032f8fe5424d3795093dfa8bd79ef4534b835..9ad4c721dd59fde433e6a8edb193717fda1418e1 100644
+index 0686b1142f3f5fd1655212e95fa05006a624a2d5..b699850d14a90a935abdac4395e2c29fb1b5df9b 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
-@@ -1056,8 +1056,10 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+@@ -1064,8 +1064,10 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
  
              if (entity.isExceedingDespawnTime(true)) {
                  entity.discard(org.bukkit.event.entity.EntityRemoveEvent.Cause.DESPAWN);
@@ -23,7 +23,7 @@ index 2a9032f8fe5424d3795093dfa8bd79ef4534b835..9ad4c721dd59fde433e6a8edb193717f
          }
      }
 diff --git a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
-index 7747e2b7c448c309563581064144368481e5d6f8..6771734e46b44a36fa31d8842a1c123290d94619 100644
+index c45f507573f98add97b9b48254f889dee9d2d8d5..c9c2f3b7985f927cabf74b01452b3dd893a2b2c9 100644
 --- a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
 +++ b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
 @@ -138,12 +138,17 @@ public class WanderingTraderSpawner implements CustomSpawner {

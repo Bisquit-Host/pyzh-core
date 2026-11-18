@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:47:29 +0300
+Subject: [PATCH] Keep keepalive handling thread safe
+
+Protect alternate keepalive decisions and replies with one lock while keeping sends and disconnect callbacks outside it.
+
+diff --git a/net/minecraft/server/network/ServerCommonPacketListenerImpl.java b/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+index 2bdb335e0a83ff8f756d66ac3ede58479075262f..fd5199676710fe3e2d41604849e963634b5c11a0 100644
+--- a/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerCommonPacketListenerImpl.java
+@@ -44,7 +44,8 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+     //private long keepAliveChallenge; // Paper - improve keepalives
+     private long closedListenerTime;
+     private boolean closed = false;
+-    private it.unimi.dsi.fastutil.longs.LongList keepAlives = new it.unimi.dsi.fastutil.longs.LongArrayList(); // Gale - Purpur - send multiple keep-alive packets
++    private final Object keepAliveLock = new Object();
++    private final it.unimi.dsi.fastutil.longs.LongList keepAlives = new it.unimi.dsi.fastutil.longs.LongArrayList(); // Gale - Purpur - send multiple keep-alive packets
+     private volatile int latency; // Paper - improve keepalives - make volatile
+     private final io.papermc.paper.util.KeepAlive keepAlive; // Paper - improve keepalives
+     private volatile boolean suspendFlushingOnServerThread = false;
+@@ -114,12 +115,14 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+         io.papermc.paper.util.KeepAlive.PendingKeepAlive pending = this.keepAlive.pendingKeepAlives.peek();
+         // Gale start - Purpur - send multiple keep-alive packets
+         if (org.galemc.gale.configuration.GaleGlobalConfiguration.get().misc.keepalive.sendMultiple) {
+-            if (this.keepAlivePending && !keepAlives.isEmpty() && keepAlives.contains(packet.getId())) {
+-                int ping = (int) (Util.getMillis() - packet.getId());
+-                int updatedLatency = (this.latency * 3 + ping) / 4;
+-                this.latency = updatedLatency;
+-                this.keepAlivePending = false;
+-                this.keepAlives.clear(); // We got a valid response, let's roll with it and forget the rest
++            synchronized (this.keepAliveLock) {
++                if (this.keepAlivePending && !this.keepAlives.isEmpty() && this.keepAlives.contains(packet.getId())) {
++                    int ping = (int) (Util.getMillis() - packet.getId());
++                    int updatedLatency = (this.latency * 3 + ping) / 4;
++                    this.latency = updatedLatency;
++                    this.keepAlivePending = false;
++                    this.keepAlives.clear(); // We got a valid response, let's roll with it and forget the rest
++                }
+             }
+             return;
+         } else {
+@@ -169,8 +172,6 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+             return;
+         }
+ 
+-        net.minecraft.network.protocol.PacketUtils.ensureRunningOnSameThread(packet, this, this.server.packetProcessor());
+-
+         // Leaf start - Protocol core
+         if (this instanceof ServerGamePacketListenerImpl gamePacketListener) {
+             org.dreeam.leaf.protocol.Protocols.handle(gamePacketListener.player, discardedPayload);
+@@ -295,12 +296,18 @@ public abstract class ServerCommonPacketListenerImpl implements ServerCommonPack
+                 long currTime = System.nanoTime();
+                 if ((currTime - this.keepAlive.lastKeepAliveTx) >= java.util.concurrent.TimeUnit.SECONDS.toNanos(1L)) { // 1 second
+                     this.keepAlive.lastKeepAliveTx = currTime;
+-                    if (this.keepAlivePending && keepAlives.size() * 1000L >= KEEPALIVE_LIMIT) {
++                    boolean timedOut;
++                    synchronized (this.keepAliveLock) {
++                        timedOut = this.keepAlivePending && this.keepAlives.size() * 1000L >= KEEPALIVE_LIMIT;
++                        if (!timedOut) {
++                            this.keepAlivePending = true;
++                            this.keepAlives.add(now); // currentTime is ID
++                        }
++                    }
++                    if (timedOut) {
+                         LOGGER.info("{} was kicked due to keepalive timeout!", this.playerProfile().name());
+                         this.disconnect(TIMEOUT_DISCONNECTION_MESSAGE, io.papermc.paper.connection.DisconnectionReason.TIMEOUT);
+                     } else if (this.checkIfClosed(now)) {
+-                        this.keepAlivePending = true;
+-                        this.keepAlives.add(now); // currentTime is ID
+                         this.send(new ClientboundKeepAlivePacket(now));
+                     }
+                 }

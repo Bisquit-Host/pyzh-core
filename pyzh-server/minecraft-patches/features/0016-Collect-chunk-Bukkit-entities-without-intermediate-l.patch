@@ -10,7 +10,7 @@ isValid do not change the list, and the empty result is still the
 shared empty array.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
-index 498f397b53b7b21f5c95cb0550381cd469cba9b1..9f1c345ddb428f71e94cf8da195b98dea7fa656f 100644
+index fc55f9ad34fab700eede3fc48f1cb4ffe147517a..996e11b406346b66caa3f13c554ceb2044899800 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
 @@ -199,6 +199,27 @@ public final class ChunkEntitySlices {
@@ -42,10 +42,10 @@ index 498f397b53b7b21f5c95cb0550381cd469cba9b1..9f1c345ddb428f71e94cf8da195b98de
          final int len = this.entities.size();
          if (len == 0) {
 diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
-index dcc783fe5aa1b4790db5873e22b32ea4517d68df..8c7f4af6a570459277c01cea9f46eca9653b920b 100644
+index 5324975538dc94868a381b1c381c88faa40631b1..df30b564786b02c393b28ed366ca98192554f35c 100644
 --- a/net/minecraft/world/level/Level.java
 +++ b/net/minecraft/world/level/Level.java
-@@ -1988,15 +1988,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+@@ -1996,15 +1996,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
              return me.titaniumtown.ArrayConstants.emptyBukkitEntityArray; // Gale - JettPack - reduce array allocations
          }
  

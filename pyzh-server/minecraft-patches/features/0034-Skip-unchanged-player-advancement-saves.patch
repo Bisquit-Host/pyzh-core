@@ -5,10 +5,10 @@ Subject: [PATCH] Skip unchanged player advancement saves
 
 
 diff --git a/net/minecraft/advancements/AdvancementProgress.java b/net/minecraft/advancements/AdvancementProgress.java
-index 8fa2687b5601008a8491049b6ea8fe9fb3120d0a..ef2d9f55e374daa0ccb408505840051e51493f3a 100644
+index 70bc7d94150bcb4aa73f524f498b60f5a1aaea08..c7fb3d68ca57586d0028221720afd6360513e4a9 100644
 --- a/net/minecraft/advancements/AdvancementProgress.java
 +++ b/net/minecraft/advancements/AdvancementProgress.java
-@@ -83,6 +83,11 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
+@@ -88,6 +88,11 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
      }
      // Pyzh end - Cache advancement completion
  
@@ -21,10 +21,10 @@ index 8fa2687b5601008a8491049b6ea8fe9fb3120d0a..ef2d9f55e374daa0ccb408505840051e
          // Pyzh start - Cache advancement completion
          final long changes = this.pyzh$changes;
 diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
-index f21c12e081a0adf8b527aa1d31f36f843762cfde..03a2345ad3a31ae0753bf40122e2d14c7c4c5069 100644
+index 9001a668f18f9b0213b19a4686e7165a4bc9e560..531e12d1d121f6be1d60e4b8fa9b49632746fc12 100644
 --- a/net/minecraft/server/PlayerAdvancements.java
 +++ b/net/minecraft/server/PlayerAdvancements.java
-@@ -61,6 +61,12 @@ public class PlayerAdvancements {
+@@ -62,6 +62,12 @@ public class PlayerAdvancements {
      private @Nullable AdvancementHolder lastSelectedTab;
      private boolean isFirstPacket = true;
      private final Codec<PlayerAdvancements.Data> codec;
@@ -37,7 +37,7 @@ index f21c12e081a0adf8b527aa1d31f36f843762cfde..03a2345ad3a31ae0753bf40122e2d14c
      // Pyzh - Keyed by the Identifier instances held by player predicates. Cleared on reload, the only time a holder's progress is replaced.
      private final it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<Identifier, AdvancementProgress> progressByPredicateId = new it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap<>();
      private final Map<CriterionTrigger<?>, Map<PlayerAdvancements.TriggerInstanceKey, ? extends CriterionTriggerInstance>> activeTriggers = new it.unimi.dsi.fastutil.objects.Reference2ReferenceOpenHashMap<>(); // Leaf - Replace criterion map with optimized collection
-@@ -86,6 +92,7 @@ public class PlayerAdvancements {
+@@ -87,6 +93,7 @@ public class PlayerAdvancements {
      }
  
      public void reload(final ServerAdvancementManager manager) {
@@ -46,9 +46,9 @@ index f21c12e081a0adf8b527aa1d31f36f843762cfde..03a2345ad3a31ae0753bf40122e2d14c
          this.progress.clear();
          this.progressByPredicateId.clear(); // Pyzh - Cache player predicate progress
 @@ -145,10 +152,27 @@ public class PlayerAdvancements {
+ 
      public void save() {
          if (org.spigotmc.SpigotConfig.disableAdvancementSaving) return; // Spigot
-         if (org.dreeam.leaf.config.modules.misc.RegionFormatConfig.isReadOnlyMode()) return; // Leaf - Add read-only mode for Linear v2
 +        // Pyzh start - Skip JSON encoding when the persisted or pending progress is unchanged.
 +        long changes = 0L;
 +        for (final AdvancementProgress progress : this.progress.values()) {

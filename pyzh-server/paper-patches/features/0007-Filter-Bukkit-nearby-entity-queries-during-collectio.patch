@@ -5,7 +5,7 @@ Subject: [PATCH] Filter Bukkit nearby entity queries during collection
 
 
 diff --git a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
-index 615d115b5490799233078b32a128b3c01865a4aa..9bb0d58be45b82019540ad7ac8e80fec1ab0b17e 100644
+index 7e2626bf5eaaf3f9c28b167b83221ab85afd9510..6884036fc61ca533af60e74c2dd62c42051f0811 100644
 --- a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
 +++ b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
 @@ -3,7 +3,6 @@ package org.bukkit.craftbukkit;
@@ -16,7 +16,7 @@ index 615d115b5490799233078b32a128b3c01865a4aa..9bb0d58be45b82019540ad7ac8e80fec
  import com.google.common.collect.Lists;
  import com.mojang.datafixers.util.Pair;
  import io.papermc.paper.FeatureHooks;
-@@ -985,21 +984,73 @@ public class CraftWorld extends CraftRegionAccessor implements World {
+@@ -1002,21 +1001,73 @@ public class CraftWorld extends CraftRegionAccessor implements World {
  
      @Override
      public Collection<Entity> getNearbyEntities(BoundingBox boundingBox, Predicate<? super Entity> filter) {
@@ -97,7 +97,7 @@ index 615d115b5490799233078b32a128b3c01865a4aa..9bb0d58be45b82019540ad7ac8e80fec
  
      @Override
 diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
-index e36424773b034d7002ee5453473ced16ca04fe60..ef15346de604f672d36b52185b2b35052eb81939 100644
+index 69315f6410a0da10c012e36aefcbdb1bf8d090af..e15dc00ff7901f9a08e51eb41774cdff174b7339 100644
 --- a/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
 +++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftEntity.java
 @@ -2,7 +2,6 @@ package org.bukkit.craftbukkit.entity;
@@ -108,7 +108,7 @@ index e36424773b034d7002ee5453473ced16ca04fe60..ef15346de604f672d36b52185b2b3505
  import com.google.common.collect.ImmutableSet;
  import com.google.common.collect.Lists;
  import com.mojang.logging.LogUtils;
-@@ -403,7 +402,7 @@ public abstract class CraftEntity implements org.bukkit.entity.Entity {
+@@ -426,7 +425,7 @@ public abstract class CraftEntity implements org.bukkit.entity.Entity {
          Preconditions.checkState(!this.entity.generation, "Cannot get nearby entities during world generation");
          org.spigotmc.AsyncCatcher.catchOp("getNearbyEntities"); // Spigot
  

@@ -6,10 +6,10 @@ Subject: [PATCH] Harden parallel world lifecycle boundaries
 Bound world-owned state to worker threads, close shutdown races, refuse deadlocking respawns, and finish bounded entity lifecycle handling.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
-index 9ad4c721dd59fde433e6a8edb193717fda1418e1..75c2168451ab042c3e32001b290af9585ef8f537 100644
+index b699850d14a90a935abdac4395e2c29fb1b5df9b..ca3413bba57675a526f00fd058940aac33b503e3 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
-@@ -1054,7 +1054,9 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+@@ -1062,7 +1062,9 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
                  continue;
              }
  
@@ -21,7 +21,7 @@ index 9ad4c721dd59fde433e6a8edb193717fda1418e1..75c2168451ab042c3e32001b290af958
                  if (entity.isRemoved()) { // Pyzh - retry when chunk status temporarily prevents removal
                      entity.leaf$isWeakLoaded = false;
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
-index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b834fe4ad 100644
+index 989cfecb214f6f08a3991de574dba0234ae73b50..44407ab50440f13ac7919050fe0760a0107a59d7 100644
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
 @@ -989,6 +989,11 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
@@ -49,7 +49,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
              result = true;
          }
  
-@@ -1092,6 +1091,13 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1081,6 +1080,13 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
          // Purpur end - UPnP Port Forwarding
          // CraftBukkit start
          if (this.server != null) {
@@ -63,7 +63,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
              this.server.spark.disable(); // Paper - spark
              this.server.disablePlugins();
              this.server.waitForAsyncTasksShutdown(); // Paper - Wait for Async Tasks during shutdown
-@@ -1132,12 +1138,14 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1121,12 +1127,14 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
          }
          // Paper end - rewrite chunk system
  
@@ -84,7 +84,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
          this.savedDataStorage.close();
          this.resources.close();
  
-@@ -1171,6 +1179,28 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1161,6 +1169,28 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
          // Paper end - Improved watchdog support - move final shutdown items here
      }
  
@@ -113,7 +113,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
      public String getLocalIp() {
          return this.localIp;
      }
-@@ -1489,6 +1519,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1471,6 +1501,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
              } catch (Throwable t) {
                  LOGGER.error("Exception stopping the server", t);
              } finally {
@@ -121,7 +121,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
                  //this.onServerExit(); // Paper - Improved watchdog support; moved into stop
              }
          }
-@@ -1870,6 +1901,16 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1851,6 +1882,16 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
  
      // Leaf start - SparklyPaper - parallel world ticking - move level ticking logic out for branch convergence
      private void tickLevel(final ServerLevel level, final BooleanSupplier haveTime) {
@@ -138,7 +138,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
          try {
              long levelTickStart = Util.getNanos(); // SparklyPaper - track world's MSPT
              level.tick(haveTime);
-@@ -1885,6 +1926,12 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1866,6 +1907,12 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
              CrashReport report = CrashReport.forThrowable(t, "Exception ticking world");
              level.fillReportDetails(report);
              throw new ReportedException(report);
@@ -151,15 +151,15 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
          }
      }
      // Leaf end - SparklyPaper - parallel world ticking - move level ticking logic out for branch convergence
-@@ -1943,6 +1990,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
-         record WorldTickTask(ServerLevel level, java.util.concurrent.Future<?> future) {}
-         java.util.ArrayDeque<WorldTickTask> tasks = new java.util.ArrayDeque<>();
+@@ -1925,6 +1972,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+         final boolean parallelWorldTicking = org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled; // Leaf - Avoid allocating world tick queue without PWT
+         final java.util.ArrayDeque<WorldTickTask> tasks = parallelWorldTicking ? new java.util.ArrayDeque<>() : null; // Leaf - Avoid allocating world tick queue without PWT
          Throwable tickFailure = null;
 +        java.lang.InterruptedException tickInterruption = null;
          boolean interrupted = false;
          try {
              for (ServerLevel level : this.getAllLevels()) {
-@@ -1950,7 +1998,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1932,7 +1980,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
                  level.hasEntityMoveEvent = io.papermc.paper.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - Add EntityMoveEvent
                  level.hasRidableMoveEvent = org.purpurmc.purpur.event.entity.RidableMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Purpur - Ridables
                  level.updateLagCompensationTick(); // Paper - lag compensation
@@ -167,7 +167,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
                  profiler.push(() -> level + " " + level.dimension().identifier());
                  profiler.push("tick");
  
-@@ -1980,10 +2027,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1962,10 +2009,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
  
                  profiler.pop();
                  profiler.pop();
@@ -179,7 +179,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
              interrupted = true;
          } catch (Throwable throwable) {
              tickFailure = throwable;
-@@ -1997,10 +2043,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1979,10 +2025,10 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
                          completed = true;
                      } catch (java.lang.InterruptedException ex) {
                          interrupted = true;
@@ -193,7 +193,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
                          }
                      } catch (java.util.concurrent.ExecutionException ex) {
                          completed = true;
-@@ -2019,6 +2065,13 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -2001,6 +2047,13 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
                  Thread.currentThread().interrupt();
              }
          }
@@ -207,7 +207,7 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
          if (tickFailure instanceof RuntimeException runtimeException) {
              throw runtimeException;
          }
-@@ -2123,7 +2176,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -2104,7 +2157,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
          Map<ResourceKey<Level>, ServerLevel> oldLevels = this.levels;
          Map<ResourceKey<Level>, ServerLevel> newLevels = Maps.newLinkedHashMap(oldLevels);
          newLevels.remove(level.dimension());
@@ -217,10 +217,10 @@ index 1a548c13eff115054b5ce4ad73f4e069f7fc8362..b54001ef563eee43ccf4934c0dd93a9b
          this.levels = Collections.unmodifiableMap(newLevels);
      }
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index 6536adbf3092c526d0da8cbd5c6b66ac05ba85dd..6e94d4cc22e04c1f3b28e941c6c502c962ffbf83 100644
+index a6ce9ae3741cfd59c972c2556e9f442163253427..2718236d60ec5ba8b0fa6bb96227a00e4a766e60 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
-@@ -906,19 +906,45 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -910,19 +910,45 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
              MinecraftServer.LOGGER.info("PWT: Cleared {} pending async read requests for world {} during shutdown.", clearedRequests, this.getWorld().getName());
          }
      }
@@ -271,10 +271,10 @@ index 6536adbf3092c526d0da8cbd5c6b66ac05ba85dd..6e94d4cc22e04c1f3b28e941c6c502c9
  
          org.dreeam.leaf.async.world.WorldReadRequest request;
 diff --git a/net/minecraft/server/players/PlayerList.java b/net/minecraft/server/players/PlayerList.java
-index 8f451c9116d0e464d01e85449891c7270bb1b0d7..cc5fc5db30d27a6afe9442e09fbe249a75fe4f6b 100644
+index e27685615e7d554bdf4e7c41149ccee211ed9bce..61b5c904538a0b635dd5e754f4c1e530445975d2 100644
 --- a/net/minecraft/server/players/PlayerList.java
 +++ b/net/minecraft/server/players/PlayerList.java
-@@ -788,10 +788,13 @@ public abstract class PlayerList {
+@@ -628,10 +628,13 @@ public abstract class PlayerList {
      // Paper start - respawn event
      public ServerPlayer respawn(final ServerPlayer serverPlayer, final boolean keepAllPlayerData, final Entity.RemovalReason removalReason, final org.bukkit.event.player.PlayerRespawnEvent.RespawnReason respawnReason) {
          // Leaf start - SparklyPaper - parallel world ticking
@@ -293,7 +293,7 @@ index 8f451c9116d0e464d01e85449891c7270bb1b0d7..cc5fc5db30d27a6afe9442e09fbe249a
          }
          // Leaf end - SparklyPaper - parallel world ticking
 diff --git a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
-index 6771734e46b44a36fa31d8842a1c123290d94619..4674cc3b089f0e4f01d293de153800305e19c6f1 100644
+index c9c2f3b7985f927cabf74b01452b3dd893a2b2c9..68928d24cf935f956f41b689d7537eaefd19fad7 100644
 --- a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
 +++ b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTraderSpawner.java
 @@ -137,18 +137,8 @@ public class WanderingTraderSpawner implements CustomSpawner {
@@ -351,11 +351,11 @@ index 6771734e46b44a36fa31d8842a1c123290d94619..4674cc3b089f0e4f01d293de15380030
 +        return spawnPos.getY() <= level.getMaxY();
 +    }
 +
-     private boolean hasEnoughSpace(final BlockGetter level, final BlockPos spawnPos) {
-         for (BlockPos pos : BlockPos.betweenClosed(spawnPos, spawnPos.offset(1, 2, 1))) {
-             if (!level.getBlockState(pos).getCollisionShape(level, pos).isEmpty()) {
+     private boolean hasEnoughSpace(final LevelReader level, final BlockPos spawnPos) {
+         return !level.findBlocksIn(spawnPos, spawnPos.offset(1, 2, 1))
+             .forEachUntil((pos, state) -> Continuation.continueIf(state.getCollisionShape(level, pos).isEmpty()));
 diff --git a/net/minecraft/world/level/block/entity/BlockEntity.java b/net/minecraft/world/level/block/entity/BlockEntity.java
-index 21afe18cc81c4f2cba98988d6acd0567b04d3d08..ecd43356ad288341322caf37f4ae55d813e186b2 100644
+index 1f06f56dba56a6cb506eb5abeb26c2a658fa89ab..5c7e0705f0893a79706b99742c3a4c7ed499bfd4 100644
 --- a/net/minecraft/world/level/block/entity/BlockEntity.java
 +++ b/net/minecraft/world/level/block/entity/BlockEntity.java
 @@ -39,7 +39,7 @@ import org.jspecify.annotations.Nullable;
@@ -367,7 +367,7 @@ index 21afe18cc81c4f2cba98988d6acd0567b04d3d08..ecd43356ad288341322caf37f4ae55d8
      // CraftBukkit start - data containers
      private static final org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry DATA_TYPE_REGISTRY = new org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry();
      public final org.bukkit.craftbukkit.persistence.CraftPersistentDataContainer persistentDataContainer;
-@@ -220,7 +220,7 @@ public abstract class BlockEntity implements DebugValueSource, TypedInstance<Blo
+@@ -211,7 +211,7 @@ public abstract class BlockEntity implements DebugValueSource, TypedInstance<Blo
  
      public void setChanged() {
          if (this.level != null) {
@@ -377,7 +377,7 @@ index 21afe18cc81c4f2cba98988d6acd0567b04d3d08..ecd43356ad288341322caf37f4ae55d8
              if (org.dreeam.leaf.config.modules.opt.SleepingBlockEntity.enabled) lithium$handleSetChanged(); // Leaves - Lithium Sleeping Block Entity
          }
 diff --git a/net/minecraft/world/level/block/entity/HopperBlockEntity.java b/net/minecraft/world/level/block/entity/HopperBlockEntity.java
-index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcfa60d208e 100644
+index a4aed3375b026d7bfa59a29990811024c02171ca..642fee302639e2feed426116177c262000c1cae1 100644
 --- a/net/minecraft/world/level/block/entity/HopperBlockEntity.java
 +++ b/net/minecraft/world/level/block/entity/HopperBlockEntity.java
 @@ -228,12 +228,16 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
@@ -398,10 +398,10 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
      private static boolean hopperPush(final Level level, final Container destination, final Direction direction, final HopperBlockEntity hopper) {
 -        skipPushModeEventFire = skipHopperEvents;
 +        SKIP_PUSH_MODE_EVENT_FIRE.set(SKIP_HOPPER_EVENTS.get());
+         final long disallowedSlots = callPrepareTransferEvent(level, hopper, destination, true); // Paper - Add PrepareHopperTransferEvent
          boolean foundItem = false;
          for (int i = 0; i < hopper.getContainerSize(); ++i) {
-             final ItemStack item = hopper.getItem(i);
-@@ -248,7 +252,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+@@ -250,7 +254,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
  
                  // We only need to fire the event once to give protection plugins a chance to cancel this event
                  // Because nothing uses getItem, every event call should end up the same result.
@@ -410,7 +410,7 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
                      movedItem = callPushMoveEvent(destination, movedItem, hopper);
                      if (movedItem == null) { // cancelled
                          origItemStack.setCount(originalItemCount);
-@@ -284,7 +288,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+@@ -286,7 +290,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
          // Leaves start - Vanilla hopper
          if (org.dreeam.leaf.config.modules.gameplay.VanillaHopper.enabled && movedItemCount == 1) {
              movedItem.setCount(movedItemCount);
@@ -419,8 +419,8 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
                  movedItem = callPullMoveEvent(hopper, container, movedItem);
                  if (movedItem == null) { // cancelled
                      origItemStack.setCount(originalItemCount);
-@@ -318,7 +322,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
-             container.setChanged(); // original logic always marks source inv as changed even if no move happens.
+@@ -319,7 +323,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+         } else {
              movedItem.setCount(movedItemCount);
  
 -            if (!skipPullModeEventFire) {
@@ -428,7 +428,7 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
                  movedItem = callPullMoveEvent(hopper, container, movedItem);
                  if (movedItem == null) { // cancelled
                      origItemStack.setCount(originalItemCount);
-@@ -338,9 +342,12 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+@@ -339,9 +343,12 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
                      origItemStack.setCount(originalItemCount - movedItemCount + remainingItemCount);
                  }
  
@@ -444,7 +444,7 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
                  container.setChanged();
                  return true;
              }
-@@ -366,7 +373,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+@@ -373,7 +380,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
          );
          final boolean result = event.callEvent();
          if (!event.calledGetItem && !event.calledSetItem) {
@@ -453,8 +453,8 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
          }
          if (!result) {
              applyCooldown(hopper);
-@@ -389,7 +396,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
-         final io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent event = new io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent(sourceInventory, org.bukkit.craftbukkit.inventory.CraftItemStack.asCraftMirror(itemstack), destination, false);
+@@ -396,7 +403,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+         final io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent event = new io.papermc.paper.event.inventory.PaperInventoryMoveItemEvent(sourceInventory, org.bukkit.craftbukkit.inventory.CraftItemStack.asBukkitMirror(itemstack), destination, false);
          final boolean result = event.callEvent();
          if (!event.calledGetItem && !event.calledSetItem) {
 -            skipPullModeEventFire = true;
@@ -462,7 +462,7 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
          }
          if (!result) {
              applyCooldown(hopper);
-@@ -536,7 +543,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+@@ -560,7 +567,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
          Container container = org.dreeam.leaf.config.modules.opt.SleepingBlockEntity.enabled ? getExtractInventory(level, hopper, blockPos, blockState) : getSourceContainer(level, hopper, blockPos, blockState); // Leaves - Lithium Sleeping Block Entity
          if (container != null) {
              Direction direction = Direction.DOWN;
@@ -471,7 +471,7 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
              // Leaves start - Lithium Sleeping Block Entity
              if (org.dreeam.leaf.config.modules.opt.SleepingBlockEntity.enabled) {
                  Boolean res = lithiumExtract(level, hopper, container);
-@@ -648,9 +655,12 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+@@ -674,9 +681,12 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
                      itemStack = itemStack.split(container.getMaxStackSize());
                  }
                  // Spigot end
@@ -487,17 +487,17 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
                  itemStack = leftover; // Paper - Make hoppers respect inventory max stack size
                  success = true;
              } else if (canMergeItems(current, itemStack)) {
-@@ -1510,7 +1520,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+@@ -1539,7 +1549,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
                  hopperBlockEntity.insertStackList.getOccupiedSlots() == 0 :
                  insertInventory.isEmpty();
  
 -        skipPushModeEventFire = skipHopperEvents;
 +        SKIP_PUSH_MODE_EVENT_FIRE.set(SKIP_HOPPER_EVENTS.get());
+         final long disallowedSlots = callPrepareTransferEvent(world, hopperBlockEntity, insertInventory, true); // Paper - Add PrepareHopperTransferEvent
          //noinspection ConstantConditions
          if (!(hopperBlockEntity.insertInventory == insertInventory && hopperBlockEntity.insertStackList.getFullSlots() == hopperBlockEntity.insertStackList.size())) {
-             Direction fromDirection = hopperBlockEntity.facing.getOpposite();
-@@ -1518,7 +1528,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
-             for (int i = 0; i < size; ++i) {
+@@ -1549,7 +1559,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+                 if (isSlotDisallowed(disallowedSlots, i)) continue; // Paper - Add PrepareHopperTransferEvent
                  ItemStack transferStack = hopperStackList.get(i);
                  if (!transferStack.isEmpty()) {
 -                    if (!skipPushModeEventFire && canTakeItemFromContainer(insertInventory, hopperBlockEntity, transferStack, i, Direction.DOWN)) {
@@ -505,7 +505,7 @@ index 688326b5b04ef33e00711c0130b171c5898e1d10..50003dbf70321c25a053de7883ee7dcf
                          transferStack = callPushMoveEvent(insertInventory, transferStack, hopperBlockEntity);
                          if (transferStack == null) { // cancelled
                              break;
-@@ -1578,7 +1588,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
+@@ -1611,7 +1621,7 @@ public class HopperBlockEntity extends RandomizableContainerBlockEntity implemen
              int fromSlot = availableSlots != null ? availableSlots[i] : i;
              ItemStack itemStack = fromStackList.get(fromSlot);
              if (!itemStack.isEmpty() && canTakeItemFromContainer(to, from, itemStack, fromSlot, Direction.DOWN)) {

@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 17 Nov 2026 20:27:22 +0300
+Subject: [PATCH] Cache immutable brain memory snapshots and accessors
+
+Cache Optional snapshots by slot value identity and one immutable accessor
+per declarative condition kind in the owning brain's MemorySlot. Clear
+accessors on identity replacement and clear, including expiry. Shared
+behavior nodes retain no brains or snapshots. Preserve trigger order,
+unregistered memories, retained accessor reads and writes, and TTL semantics.
+
+With indexed gate traversal, eight interleaved villagers pairs change
+main-thread allocation from 671.389 to 559.389 KB/t,
+-16.68% +/-2.79 points at 95% confidence. Tick time is
+1.147 to 1.115 mspt, -2.82% +/-7.80 points.
+No digest drift. All 11 selected tests pass, including shared-node writes
+from two threads, node retention, snapshot and ordered lifecycle checks.
+
+diff --git a/net/minecraft/world/entity/ai/Brain.java b/net/minecraft/world/entity/ai/Brain.java
+index 079840e1a396d45d62448e34e78a3ad5b7ef77a6..914d4e5b5c13f61e295916cc22874ac0854d3877 100644
+--- a/net/minecraft/world/entity/ai/Brain.java
++++ b/net/minecraft/world/entity/ai/Brain.java
+@@ -5,6 +5,7 @@ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.ImmutableSet;
+ import com.google.common.collect.Maps;
+ import com.google.common.collect.Sets;
++import com.mojang.datafixers.kinds.K1;
+ import com.mojang.datafixers.util.Pair;
+ import com.mojang.serialization.Codec;
+ import com.mojang.serialization.codecs.RecordCodecBuilder;
+@@ -24,6 +25,8 @@ import net.minecraft.world.attribute.EnvironmentAttributeSystem;
+ import net.minecraft.world.entity.LivingEntity;
+ import net.minecraft.world.entity.ai.behavior.Behavior;
+ import net.minecraft.world.entity.ai.behavior.BehaviorControl;
++import net.minecraft.world.entity.ai.behavior.declarative.MemoryAccessor;
++import net.minecraft.world.entity.ai.behavior.declarative.MemoryCondition;
+ import net.minecraft.world.entity.ai.memory.ExpirableValue;
+ import net.minecraft.world.entity.ai.memory.MemoryMap;
+ import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+@@ -229,12 +232,17 @@ public class Brain<E extends LivingEntity> implements net.caffeinemc.mods.lithiu
+     }
+ 
+     public <U> Optional<U> getMemory(final MemoryModuleType<U> type) {
+-        return Optional.ofNullable(this.getMemorySlot(type).value());
++        return this.getMemorySlot(type).optionalValue();
+     }
+ 
+     public <U> @Nullable Optional<U> getMemoryInternal(final MemoryModuleType<U> type) {
+         MemorySlot<U> slot = this.getMemorySlotIfPresent(type);
+-        return slot == null ? null : Optional.ofNullable(slot.value());
++        return slot == null ? null : slot.optionalValue();
++    }
++
++    public <F extends K1, U> @Nullable MemoryAccessor<F, U> getMemoryAccessor(final MemoryCondition<F, U> condition) {
++        MemorySlot<U> slot = this.getMemorySlotIfPresent(condition.memory());
++        return slot == null ? null : slot.accessor(this, condition);
+     }
+ 
+     public <U> long getTimeUntilExpiry(final MemoryModuleType<U> type) {
+diff --git a/net/minecraft/world/entity/ai/behavior/declarative/BehaviorBuilder.java b/net/minecraft/world/entity/ai/behavior/declarative/BehaviorBuilder.java
+index b3f11434b1ce5a6b74c9f47b300f811c6bb55655..2c77818a63c95be0d24d47fcb4147c51e4094041 100644
+--- a/net/minecraft/world/entity/ai/behavior/declarative/BehaviorBuilder.java
++++ b/net/minecraft/world/entity/ai/behavior/declarative/BehaviorBuilder.java
+@@ -19,7 +19,6 @@ import java.util.function.Predicate;
+ import java.util.function.Supplier;
+ import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.world.entity.LivingEntity;
+-import net.minecraft.world.entity.ai.Brain;
+ import net.minecraft.world.entity.ai.behavior.OneShot;
+ import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+ import org.jspecify.annotations.Nullable;
+@@ -429,9 +428,7 @@ public class BehaviorBuilder<E extends LivingEntity, M> implements App<BehaviorB
+             super(new BehaviorBuilder.TriggerWithResult<E, MemoryAccessor<F, Value>>() {
+                 @Override
+                 public @Nullable MemoryAccessor<F, Value> tryTrigger(final ServerLevel level, final E body, final long timestamp) {
+-                    Brain<?> brain = body.getBrain();
+-                    Optional<Value> value = brain.getMemoryInternal(condition.memory());
+-                    return value == null ? null : condition.createAccessor(brain, value);
++                    return body.getBrain().getMemoryAccessor(condition);
+                 }
+ 
+                 @Override
+diff --git a/net/minecraft/world/entity/ai/memory/MemorySlot.java b/net/minecraft/world/entity/ai/memory/MemorySlot.java
+index 0745ef1bf981830909ce2e740f9f183903c36121..713e6179171d571637b4732f4a7a7a739e083570 100644
+--- a/net/minecraft/world/entity/ai/memory/MemorySlot.java
++++ b/net/minecraft/world/entity/ai/memory/MemorySlot.java
+@@ -1,11 +1,19 @@
+ package net.minecraft.world.entity.ai.memory;
+ 
++import com.mojang.datafixers.kinds.K1;
++import java.util.Optional;
+ import net.minecraft.world.entity.ai.Brain;
++import net.minecraft.world.entity.ai.behavior.declarative.MemoryAccessor;
++import net.minecraft.world.entity.ai.behavior.declarative.MemoryCondition;
+ import org.jspecify.annotations.Nullable;
+ 
+ public class MemorySlot<T> {
+     private static final long NEVER_EXPIRE = Long.MAX_VALUE;
+     private @Nullable T value;
++    private @Nullable Optional<T> optionalValue;
++    private @Nullable MemoryAccessor<?, T> presentAccessor;
++    private @Nullable MemoryAccessor<?, T> registeredAccessor;
++    private @Nullable MemoryAccessor<?, T> absentAccessor;
+     private long timeToLive;
+ 
+     private MemorySlot(final @Nullable T value, final long timeToLive) {
+@@ -28,6 +36,10 @@ public class MemorySlot<T> {
+     }
+ 
+     public void set(final T value, final long timeToLive) {
++        if (this.value != value) {
++            this.optionalValue = null;
++            this.clearAccessors();
++        }
+         this.value = value;
+         this.timeToLive = timeToLive;
+         // Leaf start - Lithium - Reduce Brain memories lookup
+@@ -43,6 +55,8 @@ public class MemorySlot<T> {
+ 
+     public void clear() {
+         this.value = null;
++        this.optionalValue = Optional.empty();
++        this.clearAccessors();
+         this.timeToLive = Long.MAX_VALUE;
+     }
+ 
+@@ -54,6 +68,35 @@ public class MemorySlot<T> {
+         return this.value;
+     }
+ 
++    public Optional<T> optionalValue() {
++        if (this.optionalValue == null) this.optionalValue = Optional.ofNullable(this.value);
++        return this.optionalValue;
++    }
++
++    @SuppressWarnings("unchecked") // Each built-in condition kind fixes F; this slot fixes the brain, memory type and snapshot.
++    public <F extends K1> @Nullable MemoryAccessor<F, T> accessor(final Brain<?> brain, final MemoryCondition<F, T> condition) {
++        return (MemoryAccessor<F, T>) switch (condition.condition()) {
++            case VALUE_PRESENT -> {
++                if (this.presentAccessor == null) this.presentAccessor = condition.createAccessor(brain, this.optionalValue());
++                yield this.presentAccessor;
++            }
++            case REGISTERED -> {
++                if (this.registeredAccessor == null) this.registeredAccessor = condition.createAccessor(brain, this.optionalValue());
++                yield this.registeredAccessor;
++            }
++            case VALUE_ABSENT -> {
++                if (this.absentAccessor == null) this.absentAccessor = condition.createAccessor(brain, this.optionalValue());
++                yield this.absentAccessor;
++            }
++        };
++    }
++
++    private void clearAccessors() {
++        this.presentAccessor = null;
++        this.registeredAccessor = null;
++        this.absentAccessor = null;
++    }
++
+     public boolean canExpire() {
+         return this.timeToLive != Long.MAX_VALUE;
+     }

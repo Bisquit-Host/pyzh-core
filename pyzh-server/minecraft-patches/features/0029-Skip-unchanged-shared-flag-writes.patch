@@ -11,10 +11,10 @@ the mirrored flags and returns when the byte is unchanged; changed
 values still go through set() as before.
 
 diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
-index f3eb366a6d3f8f92ccf5654ff10ec7c72712f600..91889231f13c913bde6575862be85fc43b55f577 100644
+index f7d6ddfa7dae6aa6c06b60d5c394a9916a3daa92..79a9cbc5d043e3351ad578647dada7d0983140e4 100644
 --- a/net/minecraft/world/entity/Entity.java
 +++ b/net/minecraft/world/entity/Entity.java
-@@ -4018,11 +4018,13 @@ public abstract class Entity
+@@ -4136,11 +4136,13 @@ public abstract class Entity
  
      public void setSharedFlag(final @Entity.Flags int flag, final boolean value) {
          byte currentValue = this.pyzh$sharedFlags; // Pyzh - Mirror hot synced entity data

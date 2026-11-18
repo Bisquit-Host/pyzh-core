@@ -6,18 +6,18 @@ Subject: [PATCH] Remove unsafe chunk holder mirror
 Use Moonrise's canonical concurrent holder table because asynchronous ticket propagation may create holders from non-owner threads.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
-index a2bccd6a339a5faf64f2b5d47b7aacc3f848e541..cba3b800d2b5dd80164c2b5d742b28af112cf109 100644
+index 4c028e589a7c2034d18936e6fe24ef4ac65c2434..25a00732e37cc35095b48b15fa90cd2584c8e6e0 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
-@@ -80,7 +80,6 @@ public final class ChunkHolderManager {
+@@ -81,7 +81,6 @@ public final class ChunkHolderManager {
      final ChunkUnloadQueue unloadQueue;
  
-     private final ConcurrentChainedLong2ReferenceHashTable<NewChunkHolder> chunkHolders = ConcurrentChainedLong2ReferenceHashTable.createWithCapacity(16384, 0.25f);
+     private final ConcurrentChainedLong2ReferenceHashTable<NewChunkHolder> chunkHolders = ConcurrentChainedLong2ReferenceHashTable.createWithCapacity(ConcurrentChainedLong2ReferenceHashTable.defaultCapacity(), 0.25f);
 -    public final org.dreeam.leaf.world.ChunkCache<NewChunkHolder> chunkHoldersNoSync; // Leaf - thread unsafe chunk map
      private final ServerLevel world;
      private final ChunkTaskScheduler taskScheduler;
      private long currentTick;
-@@ -116,7 +115,6 @@ public final class ChunkHolderManager {
+@@ -117,7 +116,6 @@ public final class ChunkHolderManager {
          this.taskScheduler = taskScheduler;
          this.ticketLockArea = new ReentrantAreaLock(taskScheduler.getChunkSystemLockShift());
          this.unloadQueue = new ChunkUnloadQueue(((ChunkSystemServerLevel)world).moonrise$getRegionChunkShift());
@@ -25,7 +25,7 @@ index a2bccd6a339a5faf64f2b5d47b7aacc3f848e541..cba3b800d2b5dd80164c2b5d742b28af
      }
  
      public boolean processTicketUpdates(final int chunkX, final int chunkZ) {
-@@ -384,7 +382,6 @@ public final class ChunkHolderManager {
+@@ -385,7 +383,6 @@ public final class ChunkHolderManager {
                  if (current == null) {
                      // must create
                      current = ChunkHolderManager.this.createChunkHolder(key);
@@ -33,7 +33,7 @@ index a2bccd6a339a5faf64f2b5d47b7aacc3f848e541..cba3b800d2b5dd80164c2b5d742b28af
                      ChunkHolderManager.this.chunkHolders.put(key, current);
                      current.updateTicketLevel(newLevel);
                  } else {
-@@ -913,24 +910,11 @@ public final class ChunkHolderManager {
+@@ -929,24 +926,11 @@ public final class ChunkHolderManager {
      }
  
      public NewChunkHolder getChunkHolder(final int chunkX, final int chunkZ) {
@@ -60,7 +60,7 @@ index a2bccd6a339a5faf64f2b5d47b7aacc3f848e541..cba3b800d2b5dd80164c2b5d742b28af
      }
  
      public void raisePriority(final int x, final int z, final Priority priority) {
-@@ -989,7 +973,6 @@ public final class ChunkHolderManager {
+@@ -1005,7 +989,6 @@ public final class ChunkHolderManager {
          }
  
          current = this.createChunkHolder(position);
@@ -68,9 +68,9 @@ index a2bccd6a339a5faf64f2b5d47b7aacc3f848e541..cba3b800d2b5dd80164c2b5d742b28af
          this.chunkHolders.put(position, current);
  
  
-@@ -1162,11 +1145,7 @@ public final class ChunkHolderManager {
-         holder.onUnload();
+@@ -1202,11 +1185,7 @@ public final class ChunkHolderManager {
          this.autoSaveQueue.remove(holder);
+         ((ChunkSystemServerChunkCache)this.world.getChunkSource()).moonrise$chunkHolderUnload(holder);
          PlatformHooks.get().onChunkHolderDelete(this.world, holder.vanillaChunkHolder);
 -        // Leaf start - thread unsafe chunk map
 -        long position = CoordinateUtils.getChunkKey(holder.chunkX, holder.chunkZ);
@@ -82,10 +82,10 @@ index a2bccd6a339a5faf64f2b5d47b7aacc3f848e541..cba3b800d2b5dd80164c2b5d742b28af
  
      // note: never call while inside the chunk system, this will absolutely break everything
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
-index 36a766c57d78a906b461bde2c197d9ba877ab4eb..31d2e284a6c44de67de10c122875e76f76be9451 100644
+index f243127ff254816f3496320d5ca5fbff5829da19..9a803bcc32727ad712ad2d8325daec72fb3eebaf 100644
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -1957,7 +1957,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1939,7 +1939,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
                      try {
                          future = level.tickExecutor.submit(() -> {
                              level.getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map
@@ -93,7 +93,7 @@ index 36a766c57d78a906b461bde2c197d9ba877ab4eb..31d2e284a6c44de67de10c122875e76f
                              ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread currentThread = (ca.spottedleaf.moonrise.common.util.TickThread.ServerLevelTickThread) Thread.currentThread();
                              currentThread.currentTickingServerLevel = level;
                              try {
-@@ -2011,7 +2010,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1993,7 +1992,6 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
                      }
                  }
                  task.level().getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map

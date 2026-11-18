@@ -6,10 +6,10 @@ Subject: [PATCH] Fix startup and offline player stability
 Keep terminal input under the server console owner and avoid recursive online flight-state lookup.
 
 diff --git a/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java b/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java
-index f847681ec9800445d6d7d981ca70f415d70d1812..c7a1a3a6af6e323747007e2cea28bdefcc4170ee 100644
+index 4889a18fba60c2b018b80792ce809a349319a18a..358feed89e4bf6a9f527bd871a1105823662083c 100644
 --- a/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java
 +++ b/src/main/java/io/papermc/paper/world/migration/WorldFolderMigration.java
-@@ -71,38 +71,18 @@ public final class WorldFolderMigration {
+@@ -76,38 +76,18 @@ public final class WorldFolderMigration {
          LOGGER.warn("If you do not have a backup: interrupt the server now. Use Ctrl+C, your panel kill function, etc.");
          LOGGER.warn("Extra files in migrated legacy world folders may be moved, and migrated legacy folders may be deleted."); // Leaf - Forge-like startup world migration
          LOGGER.warn("=====================================================");

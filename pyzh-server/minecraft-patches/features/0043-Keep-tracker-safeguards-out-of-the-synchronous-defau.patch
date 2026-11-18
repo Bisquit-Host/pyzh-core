@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:45:06 +0300
+Subject: [PATCH] Keep tracker safeguards out of the synchronous default path
+
+Report viewers removed by updatePlayerMulti so the tracker tick republishes the observer snapshot after removal-only changes. Apply the extra environment invalidation and trader effect checks only with the async tracker enabled.
+
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+index 0a0dad530483297ef6313cad73b41e317aff5b3d..407fc5669fee5d7443d107cdaf785c12149464bb 100644
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -1679,7 +1679,7 @@ public class ChunkMap extends SimpleRegionStorage implements ChunkHolder.PlayerP
+                         return true;
+                     }
+                 } else {
+-                    this.removePlayerMulti(player);
++                    return this.removePlayerMulti(player);
+                 }
+             }
+             return false;
+diff --git a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTrader.java b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTrader.java
+index 1ed7bd37ca2b80e715cc9a9d9ea76a7f0c94d49d..392a97f8d0e733bfa1a2b5481b113758dc2832e2 100644
+--- a/net/minecraft/world/entity/npc/wanderingtrader/WanderingTrader.java
++++ b/net/minecraft/world/entity/npc/wanderingtrader/WanderingTrader.java
+@@ -122,14 +122,14 @@ public class WanderingTrader extends AbstractVillager implements Consumable.Over
+                     this,
+                     PotionContents.createItemStack(Items.POTION, Potions.INVISIBILITY),
+                     SoundEvents.WANDERING_TRADER_DISAPPEARED,
+-                    e -> this.canDrinkPotion && this.level().isDarkOutside() && !e.isInvisible() && !e.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY) // Paper - Add more WanderingTrader API // Leaf - Multithreaded tracker - prevents double use
++                    e -> this.canDrinkPotion && this.level().isDarkOutside() && !e.isInvisible() && (!org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled || !e.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY)) // Paper - Add more WanderingTrader API // Leaf - Multithreaded tracker - prevents double use
+                 )
+             );
+         this.goalSelector
+             .addGoal(
+                 0,
+                 new UseItemGoal<>(
+-                    this, new ItemStack(Items.MILK_BUCKET), SoundEvents.WANDERING_TRADER_REAPPEARED, e -> level().purpurConfig.milkClearsBeneficialEffects && this.canDrinkMilk && this.level().isBrightOutside() && e.isInvisible() && e.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY) // Paper - Add more WanderingTrader API // Purpur - Milk Keeps Beneficial Effects // Leaf - Multithreaded tracker - prevents double use
++                    this, new ItemStack(Items.MILK_BUCKET), SoundEvents.WANDERING_TRADER_REAPPEARED, e -> level().purpurConfig.milkClearsBeneficialEffects && this.canDrinkMilk && this.level().isBrightOutside() && e.isInvisible() && (!org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled || e.hasEffect(net.minecraft.world.effect.MobEffects.INVISIBILITY)) // Paper - Add more WanderingTrader API // Purpur - Milk Keeps Beneficial Effects // Leaf - Multithreaded tracker - prevents double use
+                 )
+             );
+         this.goalSelector.addGoal(1, new TradeWithPlayerGoal(this));

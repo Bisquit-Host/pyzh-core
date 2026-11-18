@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:46:28 +0300
+Subject: [PATCH] Track failed spawn attempts only for enabled throttles
+
+Skip counter maintenance and save snapshots when neither throttle uses them. Copy enabled snapshots before serialization and allocate their NBT tag only when a snapshot exists.
+
+diff --git a/net/minecraft/world/level/NaturalSpawner.java b/net/minecraft/world/level/NaturalSpawner.java
+index d3c7b58a639752c247a3885c49d6d4779577f82b..dbb301a02041431c1d4fa043614a18f65381205b 100644
+--- a/net/minecraft/world/level/NaturalSpawner.java
++++ b/net/minecraft/world/level/NaturalSpawner.java
+@@ -284,10 +284,12 @@ public final class NaturalSpawner {
+                 // Paper PR start - throttle failed spawn attempts
+                 int spawnCount = spawnCategoryForChunk(mobCategory, level, chunk, state::canSpawn, state::afterSpawn,
+                     maxSpawns, level.paperConfig().entities.spawning.perPlayerMobSpawns ? level.getChunkSource().chunkMap::updatePlayerMobTypeMap : null, generator); // Leaf - optimize mob spawning
+-                if (spawnCount == 0) {
+-                    chunk.failedSpawnAttempts[mobCategory.ordinal()]++;
+-                } else {
+-                    chunk.failedSpawnAttempts[mobCategory.ordinal()] = 0;
++                if (usesFailedSpawnAttempts(level)) {
++                    if (spawnCount == 0) {
++                        chunk.failedSpawnAttempts[mobCategory.ordinal()]++;
++                    } else {
++                        chunk.failedSpawnAttempts[mobCategory.ordinal()] = 0;
++                    }
+                 }
+                 // Paper end PR - throttle failed spawn attempts
+                 // Paper end - Optional per player mob spawns
+@@ -297,6 +299,12 @@ public final class NaturalSpawner {
+         profiler.pop();
+     }
+ 
++    public static boolean usesFailedSpawnAttempts(final ServerLevel level) {
++        return org.dreeam.leaf.config.modules.opt.ThrottleNaturalMobSpawning.enabled
++            || (level.paperConfig().entities.spawning.perPlayerMobSpawns
++                && level.paperConfig().entities.spawning.spawningThrottle.failedAttemptsThreshold.enabled());
++    }
++
+     // Paper start - Add mobcaps commands
+     public static int globalLimitForCategory(final ServerLevel level, final MobCategory category, final int spawnableChunkCount) {
+         final int categoryLimit = level.getWorld().getSpawnLimitUnsafe(org.bukkit.craftbukkit.util.CraftSpawnCategory.toBukkit(category));
+diff --git a/net/minecraft/world/level/chunk/storage/SerializableChunkData.java b/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
+index 6d453411faa989785325caf8c259da7e52dbe3eb..4f65b48815d24e4f42dc20ed073c3ff6c33b58f7 100644
+--- a/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
++++ b/net/minecraft/world/level/chunk/storage/SerializableChunkData.java
+@@ -416,7 +416,7 @@ public record SerializableChunkData(
+ 
+         // Paper PR start - throttle failed spawn attempts
+         long[] failedSpawnAttemptsData = this.failedSpawnAttempts;
+-        if (failedSpawnAttemptsData != null) {
++        if (failedSpawnAttemptsData != null && net.minecraft.world.level.NaturalSpawner.usesFailedSpawnAttempts(level)) {
+             System.arraycopy(failedSpawnAttemptsData, 0, chunk.failedSpawnAttempts, 0, failedSpawnAttemptsData.length);
+         }
+         // Paper PR end - throttle failed spawn attempts
+@@ -561,7 +561,7 @@ public record SerializableChunkData(
+             persistentDataContainer = chunk.persistentDataContainer.toTagCompound();
+         }
+         // CraftBukkit end
+-        final long[] failedSpawnAttemptsData = chunk.failedSpawnAttempts; // Paper PR - throttle failed spawn attempts
++        final long[] failedSpawnAttemptsData = net.minecraft.world.level.NaturalSpawner.usesFailedSpawnAttempts(level) ? chunk.failedSpawnAttempts.clone() : null;
+         return new SerializableChunkData(
+             level.palettedContainerFactory(),
+             pos,
+@@ -664,18 +664,18 @@ public record SerializableChunkData(
+         }
+         // CraftBukkit end
+         // Paper PR start - throttle failed spawn attempts
+-        CompoundTag failedSpawnAttemptsTag = new CompoundTag();
+         long[] failedSpawnAttemptsData = this.failedSpawnAttempts;
+         if (failedSpawnAttemptsData != null) {
++            CompoundTag failedSpawnAttemptsTag = new CompoundTag();
+             for (net.minecraft.world.entity.MobCategory mobCategory : net.minecraft.world.entity.MobCategory.values()) {
+                 long failedAttempts = failedSpawnAttemptsData[mobCategory.ordinal()];
+                 if (failedAttempts > 0) {
+                     failedSpawnAttemptsTag.putLong(mobCategory.getSerializedName(), failedAttempts);
+                 }
+             }
+-        }
+-        if (!failedSpawnAttemptsTag.isEmpty()) {
+-            tag.put("Paper.FailedSpawnAttempts", failedSpawnAttemptsTag);
++            if (!failedSpawnAttemptsTag.isEmpty()) {
++                tag.put("Paper.FailedSpawnAttempts", failedSpawnAttemptsTag);
++            }
+         }
+         // Paper PR end - throttle failed spawn attempts
+         // Paper start - starlight

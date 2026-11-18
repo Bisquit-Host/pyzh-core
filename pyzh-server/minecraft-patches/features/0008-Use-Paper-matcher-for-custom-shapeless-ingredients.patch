@@ -5,7 +5,7 @@ Subject: [PATCH] Use Paper matcher for custom shapeless ingredients
 
 
 diff --git a/net/minecraft/world/item/crafting/ShapelessRecipe.java b/net/minecraft/world/item/crafting/ShapelessRecipe.java
-index e8b9e5f49e498c8ba059cdb4a25f6273668e2c72..ef6b929185d8c7a530941f57630e37c28a1373f0 100644
+index 431316a2d2f1e14cdf2edc7bf414b00416de645e..b50d6257903afecc55eb037e3b863f9119344b65 100644
 --- a/net/minecraft/world/item/crafting/ShapelessRecipe.java
 +++ b/net/minecraft/world/item/crafting/ShapelessRecipe.java
 @@ -38,7 +38,8 @@ public class ShapelessRecipe extends NormalCraftingRecipe {
@@ -23,7 +23,7 @@ index e8b9e5f49e498c8ba059cdb4a25f6273668e2c72..ef6b929185d8c7a530941f57630e37c2
      }
      public ShapelessRecipe(final Recipe.CommonInfo commonInfo, final CraftingRecipe.CraftingBookInfo bookInfo, final ItemStackTemplate result, final List<Ingredient> ingredients, boolean isBukkit) {
 -        this.isBukkit = isBukkit;
-+        this.useSimpleMatching = !isBukkit && ingredients.stream().noneMatch(ingredient -> ingredient.isExact() || ingredient.stackPredicate != null || ingredient.predicate != null);
++        this.useSimpleMatching = !isBukkit && ingredients.stream().noneMatch(ingredient -> ingredient.isExact() || ingredient.stackPredicate != null);
          // Gale end - Airplane - simpler ShapelessRecipe comparison for vanilla
          super(commonInfo, bookInfo);
          this.result = result;

@@ -10,10 +10,10 @@ login. Player advancements, criterion progress and per-type stats maps
 now use HashedUnboundedMapCodec, which decodes to the same results.
 
 diff --git a/net/minecraft/advancements/AdvancementProgress.java b/net/minecraft/advancements/AdvancementProgress.java
-index 2a15f113e45f9d9a62bfcfecbe64865ad3c89ddf..8fa2687b5601008a8491049b6ea8fe9fb3120d0a 100644
+index c8f6fb16240c3b9c8fdfe6df2cc30885d100ee31..70bc7d94150bcb4aa73f524f498b60f5a1aaea08 100644
 --- a/net/minecraft/advancements/AdvancementProgress.java
 +++ b/net/minecraft/advancements/AdvancementProgress.java
-@@ -26,7 +26,7 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
+@@ -28,7 +28,7 @@ public class AdvancementProgress implements Comparable<AdvancementProgress> {
      private static final DateTimeFormatter OBTAINED_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT);
      private static final Codec<Instant> OBTAINED_TIME_CODEC = ExtraCodecs.temporalCodec(OBTAINED_TIME_FORMAT)
          .xmap(Instant::from, instant -> instant.atZone(ZoneId.systemDefault()));
@@ -23,10 +23,10 @@ index 2a15f113e45f9d9a62bfcfecbe64865ad3c89ddf..8fa2687b5601008a8491049b6ea8fe9f
              map -> Util.mapValues((Map<String, Instant>)map, CriterionProgress::new),
              map -> map.entrySet()
 diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
-index d80093d6f6edd65e62beb4449322d00b5d9c73c6..f21c12e081a0adf8b527aa1d31f36f843762cfde 100644
+index f9e30e68f557056a7dccac98a5f986a0c20c87be..9001a668f18f9b0213b19a4686e7165a4bc9e560 100644
 --- a/net/minecraft/server/PlayerAdvancements.java
 +++ b/net/minecraft/server/PlayerAdvancements.java
-@@ -404,7 +404,7 @@ public class PlayerAdvancements {
+@@ -401,7 +401,7 @@ public class PlayerAdvancements {
      }
  
      private record Data(Map<Identifier, AdvancementProgress> map) {
@@ -36,7 +36,7 @@ index d80093d6f6edd65e62beb4449322d00b5d9c73c6..f21c12e081a0adf8b527aa1d31f36f84
  
          public void forEach(final BiConsumer<Identifier, AdvancementProgress> consumer) {
 diff --git a/net/minecraft/stats/ServerStatsCounter.java b/net/minecraft/stats/ServerStatsCounter.java
-index 938f99e0809619a205d3f08369dc2544be309033..9d87d18b7a86aed09f5b034fea546e316351224f 100644
+index c2baf1ac8b4f3960588c1fdf25540c52f5808c44..d423fd2dcd0326f1361b9c3ae3a8adab25434b49 100644
 --- a/net/minecraft/stats/ServerStatsCounter.java
 +++ b/net/minecraft/stats/ServerStatsCounter.java
 @@ -60,7 +60,7 @@ public class ServerStatsCounter extends StatsCounter {

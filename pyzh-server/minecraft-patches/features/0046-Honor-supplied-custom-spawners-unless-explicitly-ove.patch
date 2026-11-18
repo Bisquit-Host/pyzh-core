@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:46:10 +0300
+Subject: [PATCH] Honor supplied custom spawners unless explicitly overridden
+
+Keep unset Purpur spawner toggles tri-state and preserve the constructor list, including custom spawners and their order. Apply explicit overrides only to the matching built-in spawner.
+
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index 1430205cc2893d4f4cc631da281418086aa05ddc..c3114857ffa08880c1e508ba2e8b3dbec760ac8d 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -216,6 +216,19 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     private final List<BlockEventData> blockEventsToReschedule = new ArrayList<>(64);
+     private boolean handlingTick;
+     private final List<CustomSpawner> customSpawners;
++
++    static <T extends CustomSpawner> void configureCustomSpawner(
++        final List<CustomSpawner> spawners, final Class<T> type, final @Nullable Boolean enabled, final java.util.function.Supplier<T> factory
++    ) {
++        if (enabled == null) {
++            return;
++        }
++        if (!enabled) {
++            spawners.removeIf(type::isInstance);
++        } else if (spawners.stream().noneMatch(type::isInstance)) {
++            spawners.add(factory.get());
++        }
++    }
+     private @Nullable EnderDragonFight dragonFight;
+     private final Int2ObjectMap<EnderDragonPart> dragonParts = new Int2ObjectOpenHashMap<>();
+     private final BiomeResolver uncachedBiomeResolver;
+@@ -695,24 +708,14 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+         // CraftBukkit end
+         this.tickTime = tickTime;
+         this.server = server;
+-        this.customSpawners = new ArrayList<>(); // Purpur - Allow toggling special MobSpawners per world
++        this.customSpawners = new ArrayList<>(customSpawners);
+         this.serverLevelData = levelData;
+         // Purpur start - Allow toggling special MobSpawners per world
+-        if (purpurConfig.phantomSpawning) {
+-            this.customSpawners.add(new net.minecraft.world.level.levelgen.PhantomSpawner());
+-        }
+-        if (purpurConfig.patrolSpawning) {
+-            this.customSpawners.add(new net.minecraft.world.level.levelgen.PatrolSpawner());
+-        }
+-        if (purpurConfig.catSpawning) {
+-            this.customSpawners.add(new net.minecraft.world.entity.npc.CatSpawner());
+-        }
+-        if (purpurConfig.villageSiegeSpawning) {
+-            this.customSpawners.add(new net.minecraft.world.entity.ai.village.VillageSiege());
+-        }
+-        if (purpurConfig.villagerTraderSpawning) {
+-            this.customSpawners.add(new net.minecraft.world.entity.npc.wanderingtrader.WanderingTraderSpawner(savedDataStorage));
+-        }
++        configureCustomSpawner(this.customSpawners, net.minecraft.world.level.levelgen.PhantomSpawner.class, purpurConfig.phantomSpawning, net.minecraft.world.level.levelgen.PhantomSpawner::new);
++        configureCustomSpawner(this.customSpawners, net.minecraft.world.level.levelgen.PatrolSpawner.class, purpurConfig.patrolSpawning, net.minecraft.world.level.levelgen.PatrolSpawner::new);
++        configureCustomSpawner(this.customSpawners, net.minecraft.world.entity.npc.CatSpawner.class, purpurConfig.catSpawning, net.minecraft.world.entity.npc.CatSpawner::new);
++        configureCustomSpawner(this.customSpawners, net.minecraft.world.entity.ai.village.VillageSiege.class, purpurConfig.villageSiegeSpawning, net.minecraft.world.entity.ai.village.VillageSiege::new);
++        configureCustomSpawner(this.customSpawners, net.minecraft.world.entity.npc.wanderingtrader.WanderingTraderSpawner.class, purpurConfig.villagerTraderSpawning, () -> new net.minecraft.world.entity.npc.wanderingtrader.WanderingTraderSpawner(savedDataStorage));
+         // Purpur end - Allow toggling special MobSpawners per world
+         ChunkGenerator generator = levelStem.generator();
+         // CraftBukkit start
+diff --git a/org/purpurmc/purpur/PurpurWorldConfig.java b/org/purpurmc/purpur/PurpurWorldConfig.java
+index a04374f534e4a419776b4cabf32c17077e7847e7..3c26b9c0a7432d7bc698768df6b388e711416fd9 100644
+--- a/org/purpurmc/purpur/PurpurWorldConfig.java
++++ b/org/purpurmc/purpur/PurpurWorldConfig.java
+@@ -432,20 +432,18 @@ public class PurpurWorldConfig {
+         humanSaturationRegenAmount = (float) getDouble("gameplay-mechanics.mob-effects.saturation-regen-amount", humanSaturationRegenAmount);
+     }
+ 
+-    public boolean catSpawning;
+-    public boolean patrolSpawning;
+-    public boolean phantomSpawning;
+-    public boolean villagerTraderSpawning;
+-    public boolean villageSiegeSpawning;
++    public Boolean catSpawning;
++    public Boolean patrolSpawning;
++    public Boolean phantomSpawning;
++    public Boolean villagerTraderSpawning;
++    public Boolean villageSiegeSpawning;
+     public boolean mobSpawningIgnoreCreativePlayers = false;
+     private void mobSpawnerSettings() {
+-        // values of "default" or null will default to true only if the world environment is normal (aka overworld)
+-        Predicate<Boolean> predicate = (bool) -> (bool != null && bool) || (bool == null && environment == World.Environment.NORMAL);
+-        catSpawning = getBoolean("gameplay-mechanics.mob-spawning.village-cats", predicate);
+-        patrolSpawning = getBoolean("gameplay-mechanics.mob-spawning.raid-patrols", predicate);
+-        phantomSpawning = getBoolean("gameplay-mechanics.mob-spawning.phantoms", predicate);
+-        villagerTraderSpawning = getBoolean("gameplay-mechanics.mob-spawning.wandering-traders", predicate);
+-        villageSiegeSpawning = getBoolean("gameplay-mechanics.mob-spawning.village-sieges", predicate);
++        catSpawning = getBooleanOrDefault("gameplay-mechanics.mob-spawning.village-cats", null);
++        patrolSpawning = getBooleanOrDefault("gameplay-mechanics.mob-spawning.raid-patrols", null);
++        phantomSpawning = getBooleanOrDefault("gameplay-mechanics.mob-spawning.phantoms", null);
++        villagerTraderSpawning = getBooleanOrDefault("gameplay-mechanics.mob-spawning.wandering-traders", null);
++        villageSiegeSpawning = getBooleanOrDefault("gameplay-mechanics.mob-spawning.village-sieges", null);
+         mobSpawningIgnoreCreativePlayers = getBoolean("gameplay-mechanics.mob-spawning.ignore-creative-players", mobSpawningIgnoreCreativePlayers);
+     }
+ 

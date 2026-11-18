@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 17 Nov 2026 03:46:10 +0300
+Subject: [PATCH] Reuse positions in redstone signal scans
+
+Use invocation-local mutable positions for neighbor signal scans and incoming
+wire reads, and construct the fixed above position once per scan. Keep state
+reads, conductor predicates, direction order and early returns unchanged.
+Leave the neighbor update HashSet, position hashing, writes and signal flags
+untouched. Nested signal scans retain independent scratch positions.
+
+With the accompanying wire event guards, six interleaved redstone runs measure
+2.733 to 2.650 mspt, -3.05% with a 2.95 percentage-point 95% half-width, and
+4465.372 to 2335.146 KB allocated per tick, -47.71% with a 0.21-point half-width.
+All exact digest fields, including the block-state CRC, match. Focused
+randomized differential and event tests pass.
+
+diff --git a/net/minecraft/world/level/SignalGetter.java b/net/minecraft/world/level/SignalGetter.java
+index 25cb99e73c5be6e0471b274be60c55d73015ec06..fa3618b7dc3c760e72d66585ecd73dda6878743c 100644
+--- a/net/minecraft/world/level/SignalGetter.java
++++ b/net/minecraft/world/level/SignalGetter.java
+@@ -16,33 +16,34 @@ public interface SignalGetter extends BlockGetter {
+     }
+ 
+     default int getDirectSignalTo(final BlockPos pos) {
++        BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
+         int result = 0;
+-        result = Math.max(result, this.getDirectSignal(pos.below(), Direction.DOWN));
++        result = Math.max(result, this.getDirectSignal(neighborPos.setWithOffset(pos, Direction.DOWN), Direction.DOWN));
+         if (result >= Redstone.SIGNAL_MAX) {
+             return result;
+         }
+ 
+-        result = Math.max(result, this.getDirectSignal(pos.above(), Direction.UP));
++        result = Math.max(result, this.getDirectSignal(neighborPos.setWithOffset(pos, Direction.UP), Direction.UP));
+         if (result >= Redstone.SIGNAL_MAX) {
+             return result;
+         }
+ 
+-        result = Math.max(result, this.getDirectSignal(pos.north(), Direction.NORTH));
++        result = Math.max(result, this.getDirectSignal(neighborPos.setWithOffset(pos, Direction.NORTH), Direction.NORTH));
+         if (result >= Redstone.SIGNAL_MAX) {
+             return result;
+         }
+ 
+-        result = Math.max(result, this.getDirectSignal(pos.south(), Direction.SOUTH));
++        result = Math.max(result, this.getDirectSignal(neighborPos.setWithOffset(pos, Direction.SOUTH), Direction.SOUTH));
+         if (result >= Redstone.SIGNAL_MAX) {
+             return result;
+         }
+ 
+-        result = Math.max(result, this.getDirectSignal(pos.west(), Direction.WEST));
++        result = Math.max(result, this.getDirectSignal(neighborPos.setWithOffset(pos, Direction.WEST), Direction.WEST));
+         if (result >= Redstone.SIGNAL_MAX) {
+             return result;
+         }
+ 
+-        result = Math.max(result, this.getDirectSignal(pos.east(), Direction.EAST));
++        result = Math.max(result, this.getDirectSignal(neighborPos.setWithOffset(pos, Direction.EAST), Direction.EAST));
+         return result >= Redstone.SIGNAL_MAX ? result : result;
+     }
+ 
+@@ -85,9 +86,10 @@ public interface SignalGetter extends BlockGetter {
+ 
+     default int getBestNeighborSignal(final BlockPos pos) {
+         int best = Redstone.SIGNAL_MIN;
++        BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
+ 
+         for (Direction direction : DIRECTIONS) {
+-            int signal = this.getSignal(pos.relative(direction), direction);
++            int signal = this.getSignal(neighborPos.setWithOffset(pos, direction), direction);
+             if (signal >= Redstone.SIGNAL_MAX) {
+                 return Redstone.SIGNAL_MAX;
+             }
+diff --git a/net/minecraft/world/level/redstone/RedstoneWireEvaluator.java b/net/minecraft/world/level/redstone/RedstoneWireEvaluator.java
+index da893a2d1c6e60deb7cbfd959264d8d072bf440b..1d34e18b7a15f661b48684266025cf537bb3c1d1 100644
+--- a/net/minecraft/world/level/redstone/RedstoneWireEvaluator.java
++++ b/net/minecraft/world/level/redstone/RedstoneWireEvaluator.java
+@@ -28,17 +28,19 @@ public abstract class RedstoneWireEvaluator {
+ 
+     protected int getIncomingWireSignal(final Level level, final BlockPos pos) {
+         int wireSignal = 0;
++        BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
++        BlockPos.MutableBlockPos verticalNeighborPos = new BlockPos.MutableBlockPos();
++        BlockPos abovePos = pos.above();
+ 
+         for (Direction direction : Direction.Plane.HORIZONTAL.faces) { // Pluto - Expose Direction$Plane's faces
+-            BlockPos neighborPos = pos.relative(direction);
++            neighborPos.setWithOffset(pos, direction);
+             BlockState neighborState = level.getBlockState(neighborPos);
+             wireSignal = Math.max(wireSignal, this.getWireSignal(neighborPos, neighborState));
+-            BlockPos abovePos = pos.above();
+             if (neighborState.isRedstoneConductor(level, neighborPos) && !level.getBlockState(abovePos).isRedstoneConductor(level, abovePos)) {
+-                BlockPos aboveNeighborPos = neighborPos.above();
++                BlockPos aboveNeighborPos = verticalNeighborPos.setWithOffset(neighborPos, Direction.UP);
+                 wireSignal = Math.max(wireSignal, this.getWireSignal(aboveNeighborPos, level.getBlockState(aboveNeighborPos)));
+             } else if (!neighborState.isRedstoneConductor(level, neighborPos)) {
+-                BlockPos belowNeighborPos = neighborPos.below();
++                BlockPos belowNeighborPos = verticalNeighborPos.setWithOffset(neighborPos, Direction.DOWN);
+                 wireSignal = Math.max(wireSignal, this.getWireSignal(belowNeighborPos, level.getBlockState(belowNeighborPos)));
+             }
+         }

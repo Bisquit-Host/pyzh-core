@@ -14,10 +14,10 @@ updated atomically. JMH, 1,100-entity section: 3.52 to 2.56 ms per
 query round; no difference when the section fits in cache.
 
 diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
-index 9f1c345ddb428f71e94cf8da195b98dea7fa656f..569d414d97516f9edd413e95195653f0d8c1d30e 100644
+index 996e11b406346b66caa3f13c554ceb2044899800..b935ef1377563f349cace2d8fae721a8fa9b1d54 100644
 --- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
 +++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/ChunkEntitySlices.java
-@@ -593,6 +593,7 @@ public final class ChunkEntitySlices {
+@@ -594,6 +594,7 @@ public final class ChunkEntitySlices {
              final double boxMaxX = box.maxX;
              final double boxMaxY = box.maxY;
              final double boxMaxZ = box.maxZ;
@@ -25,7 +25,7 @@ index 9f1c345ddb428f71e94cf8da195b98dea7fa656f..569d414d97516f9edd413e95195653f0
  
              for (int section = min; section <= max; ++section) {
                  final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
-@@ -612,8 +613,7 @@ public final class ChunkEntitySlices {
+@@ -613,8 +614,7 @@ public final class ChunkEntitySlices {
                      }
  
                      // Inline AABB#intersects to avoid a method call and use the cached AABB fields.
@@ -35,7 +35,7 @@ index 9f1c345ddb428f71e94cf8da195b98dea7fa656f..569d414d97516f9edd413e95195653f0
                          // Leaf end - Optimise getEntities
                          continue;
                      }
-@@ -650,6 +650,7 @@ public final class ChunkEntitySlices {
+@@ -651,6 +651,7 @@ public final class ChunkEntitySlices {
              final double boxMaxX = box.maxX;
              final double boxMaxY = box.maxY;
              final double boxMaxZ = box.maxZ;
@@ -43,7 +43,7 @@ index 9f1c345ddb428f71e94cf8da195b98dea7fa656f..569d414d97516f9edd413e95195653f0
  
              for (int section = min; section <= max; ++section) {
                  final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
-@@ -668,8 +669,7 @@ public final class ChunkEntitySlices {
+@@ -669,8 +670,7 @@ public final class ChunkEntitySlices {
                      }
  
                      // Inline AABB#intersects to avoid a method call and use the cached AABB fields.
@@ -53,7 +53,7 @@ index 9f1c345ddb428f71e94cf8da195b98dea7fa656f..569d414d97516f9edd413e95195653f0
                          // Leaf end - Optimise getEntities
                          continue;
                      }
-@@ -707,6 +707,7 @@ public final class ChunkEntitySlices {
+@@ -708,6 +708,7 @@ public final class ChunkEntitySlices {
              final double boxMaxX = box.maxX;
              final double boxMaxY = box.maxY;
              final double boxMaxZ = box.maxZ;
@@ -61,7 +61,7 @@ index 9f1c345ddb428f71e94cf8da195b98dea7fa656f..569d414d97516f9edd413e95195653f0
  
              for (int section = min; section <= max; ++section) {
                  final BasicEntityList<Entity> list = entitiesBySection[section - minSection];
-@@ -723,8 +724,7 @@ public final class ChunkEntitySlices {
+@@ -724,8 +725,7 @@ public final class ChunkEntitySlices {
                          continue;
                      }
  
@@ -72,10 +72,10 @@ index 9f1c345ddb428f71e94cf8da195b98dea7fa656f..569d414d97516f9edd413e95195653f0
                      }
  
 diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
-index cfce8e418e5cf198ecab547667dfe8da6d39c504..f3eb366a6d3f8f92ccf5654ff10ec7c72712f600 100644
+index 96fe7d0ee0e4f9189b8fdd922ee6c03e2c6d4008..f7d6ddfa7dae6aa6c06b60d5c394a9916a3daa92 100644
 --- a/net/minecraft/world/entity/Entity.java
 +++ b/net/minecraft/world/entity/Entity.java
-@@ -282,6 +282,8 @@ public abstract class Entity
+@@ -286,6 +286,8 @@ public abstract class Entity
      public float yRotO;
      public float xRotO;
      private AABB bb = INITIAL_AABB;
@@ -84,7 +84,7 @@ index cfce8e418e5cf198ecab547667dfe8da6d39c504..f3eb366a6d3f8f92ccf5654ff10ec7c7
      private boolean boundingBoxChanged = false; // Gale - VMP - skip entity move if movement is zero
      public boolean onGround;
      public boolean horizontalCollision;
-@@ -4898,10 +4900,32 @@ public abstract class Entity
+@@ -5060,10 +5062,32 @@ public abstract class Entity
          len = bb.maxZ - bb.minZ;
          if (len < 0) maxZ = minZ;
          if (len > 64) maxZ = minZ + 64.0;

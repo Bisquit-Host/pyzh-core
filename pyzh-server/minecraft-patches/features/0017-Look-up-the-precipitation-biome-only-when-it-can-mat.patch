@@ -10,10 +10,10 @@ now happens under that check, or when it is raining, in the same order
 relative to the ice form event.
 
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index 6e94d4cc22e04c1f3b28e941c6c502c962ffbf83..fb00b6c85e05be5e6183102ec311909020d52bce 100644
+index 2718236d60ec5ba8b0fa6bb96227a00e4a766e60..57a14686fd361610683a2f6d33f3bee90d9cf96d 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
-@@ -1378,12 +1378,20 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -1383,12 +1383,20 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
      public void tickPrecipitation(final BlockPos pos) {
          BlockPos topPos = this.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, pos);
          BlockPos belowPos = topPos.below();

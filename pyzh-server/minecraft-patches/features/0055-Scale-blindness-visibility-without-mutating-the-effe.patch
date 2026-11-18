@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:40:21 +0300
+Subject: [PATCH] Scale blindness visibility without mutating the effect level
+
+Skip effect lookups at the default multiplier and apply one multiplication per blindness level with a fixed loop bound.
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 503f94b01d04c2e50b6630b9ebb519bf49a7d9d0..881ded967d1c470ec21a8db79888df533bfe382f 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -1111,11 +1111,13 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+         }
+ 
+         // Purpur start - Configurable mob blindness
+-        if (targetingEntity instanceof LivingEntity entityliving) {
+-            if (entityliving.hasEffect(MobEffects.BLINDNESS)) {
+-                int amplifier = entityliving.getEffect(MobEffects.BLINDNESS).getAmplifier();
+-                for (int i = 0; i < amplifier; i++) {
+-                    amplifier *= this.level().purpurConfig.mobsBlindnessMultiplier;
++        double blindnessMultiplier = this.level().purpurConfig.mobsBlindnessMultiplier;
++        if (blindnessMultiplier != 1.0 && targetingEntity instanceof LivingEntity entityliving) {
++            MobEffectInstance blindness = entityliving.getEffect(MobEffects.BLINDNESS);
++            if (blindness != null) {
++                int amplifier = blindness.getAmplifier();
++                for (int i = 0; i <= amplifier; i++) {
++                    visibilityPercent *= blindnessMultiplier;
+                 }
+             }
+         }

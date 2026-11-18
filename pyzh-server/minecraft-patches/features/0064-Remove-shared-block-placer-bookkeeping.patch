@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:47:35 +0300
+Subject: [PATCH] Remove shared block placer bookkeeping
+
+Remove the inert singleton placer field and placement-derived summoner
+wiring. Keep entity summoner APIs and persistence intact.
+
+diff --git a/net/minecraft/world/item/ItemStack.java b/net/minecraft/world/item/ItemStack.java
+index 9ee71d0e006a4ee77ce10c8c4e571e4a49db8ec3..6465333fc26ba87638366662e8e508260d2bd9b3 100644
+--- a/net/minecraft/world/item/ItemStack.java
++++ b/net/minecraft/world/item/ItemStack.java
+@@ -482,7 +482,6 @@ public final class ItemStack implements DataComponentHolder, ItemInstance, net.c
+                     // revert back all captured blocks
+                     for (org.bukkit.craftbukkit.block.CraftBlockState snapshot : capturedBlockStates) {
+                         snapshot.revertPlace(true); // poi updates needs to be skipped since the poi were never registered as part of the capture
+-                        snapshot.getBlock().getBlockState().getBlock().forgetPlacer(); // Purpur - Store placer on Block when placed
+                     }
+                 } else {
+                     // Change the stack to its new contents if it hasn't been tampered with.
+@@ -503,7 +502,6 @@ public final class ItemStack implements DataComponentHolder, ItemInstance, net.c
+                         if (!(block.getBlock() instanceof net.minecraft.world.level.block.BaseEntityBlock)) { // Containers get placed automatically
+                             block.onPlace(level, newPos, oldBlock, true, context);
+                         }
+-                        block.getBlock().forgetPlacer(); // Purpur - Store placer on Block when placed
+ 
+                         level.notifyAndUpdatePhysics(newPos, null, oldBlock, block, level.getBlockState(newPos), snapshot.getFlags(), net.minecraft.world.level.block.Block.UPDATE_LIMIT); // send null chunk as chunk.k() returns false by this point
+                     }
+diff --git a/net/minecraft/world/level/block/Block.java b/net/minecraft/world/level/block/Block.java
+index c2d487f2b17ef9e5068817469deecff81b46dbc9..908cbd7e7ef2db89d8435edcc8a11418859d1cc7 100644
+--- a/net/minecraft/world/level/block/Block.java
++++ b/net/minecraft/world/level/block/Block.java
+@@ -564,16 +564,8 @@ public class Block extends BlockBehaviour implements ItemLike {
+     }
+ 
+     public void setPlacedBy(final Level level, final BlockPos pos, final BlockState state, final @Nullable LivingEntity by, final ItemStack itemStack) {
+-        this.placer = by; // Purpur - Store placer on Block when placed
+     }
+ 
+-    // Purpur start - Store placer on Block when placed
+-    @Nullable protected LivingEntity placer = null;
+-    public void forgetPlacer() {
+-        this.placer = null;
+-    }
+-    // Purpur end - Store placer on Block when placed
+-
+     public boolean isPossibleToRespawnInThis(final BlockState state) {
+         return !state.isSolid() && !state.liquid();
+     }
+diff --git a/net/minecraft/world/level/block/CarvedPumpkinBlock.java b/net/minecraft/world/level/block/CarvedPumpkinBlock.java
+index 9c95105bb74c4d83bab47129b673040be5a3ef16..d41759018aa43408c7827201ff78b5ee235f8a5e 100644
+--- a/net/minecraft/world/level/block/CarvedPumpkinBlock.java
++++ b/net/minecraft/world/level/block/CarvedPumpkinBlock.java
+@@ -60,7 +60,7 @@ public class CarvedPumpkinBlock extends HorizontalDirectionalBlock {
+         if (snowGolemMatch != null) {
+             SnowGolem snowGolem = EntityTypes.SNOW_GOLEM.create(level, EntitySpawnReason.TRIGGERED);
+             if (snowGolem != null) {
+-                spawnGolemInWorld(level, snowGolemMatch, snowGolem, snowGolemMatch.getBlock(0, 2, 0).getPos(), this.placer); // Purpur - Summoner API
++                spawnGolemInWorld(level, snowGolemMatch, snowGolem, snowGolemMatch.getBlock(0, 2, 0).getPos());
+                 return;
+             }
+         }
+@@ -70,7 +70,7 @@ public class CarvedPumpkinBlock extends HorizontalDirectionalBlock {
+             IronGolem ironGolem = EntityTypes.IRON_GOLEM.create(level, EntitySpawnReason.TRIGGERED);
+             if (ironGolem != null) {
+                 ironGolem.setPlayerCreated(true);
+-                spawnGolemInWorld(level, ironGolemMatch, ironGolem, ironGolemMatch.getBlock(1, 2, 0).getPos(), this.placer); // Purpur - Summoner API
++                spawnGolemInWorld(level, ironGolemMatch, ironGolem, ironGolemMatch.getBlock(1, 2, 0).getPos());
+                 return;
+             }
+         }
+@@ -79,7 +79,7 @@ public class CarvedPumpkinBlock extends HorizontalDirectionalBlock {
+         if (copperGolemMatch != null) {
+             CopperGolem copperGolem = EntityTypes.COPPER_GOLEM.create(level, EntitySpawnReason.TRIGGERED);
+             if (copperGolem != null) {
+-                spawnGolemInWorld(level, copperGolemMatch, copperGolem, copperGolemMatch.getBlock(0, 0, 0).getPos(), this.placer); // Purpur - Summoner API
++                spawnGolemInWorld(level, copperGolemMatch, copperGolem, copperGolemMatch.getBlock(0, 0, 0).getPos());
+                 if (!copperGolem.valid) return; // Paper - entityspawnevent - entity was not added to the world so prevent world mutation
+                 this.replaceCopperBlockWithChest(level, copperGolemMatch);
+                 copperGolem.spawn(this.getWeatherStateFromPattern(copperGolemMatch));
+@@ -98,20 +98,7 @@ public class CarvedPumpkinBlock extends HorizontalDirectionalBlock {
+                 .getAge();
+     }
+ 
+-    @io.papermc.paper.annotation.DoNotUse
+     private static void spawnGolemInWorld(final Level level, final BlockPattern.BlockPatternMatch match, final Entity golem, final BlockPos spawnPos) {
+-        // Purpur start - Summoner API
+-        spawnGolemInWorld(level, match, golem, spawnPos, null);
+-    }
+-    private static void spawnGolemInWorld(final Level level, final BlockPattern.BlockPatternMatch match, final Entity golem, final BlockPos spawnPos, final net.minecraft.world.entity.LivingEntity placer) {
+-        java.util.UUID summoner = placer == null ? null : placer.getUUID();
+-        switch (golem) {
+-            case SnowGolem snowGolem -> snowGolem.setSummoner(summoner);
+-            case IronGolem ironGolem -> ironGolem.setSummoner(summoner);
+-            case CopperGolem copperGolem -> copperGolem.setSummoner(summoner);
+-            default -> throw new IllegalStateException("Unexpected value: " + golem);
+-        }
+-        // Purpur end - Summoner API
+         // clearPatternBlocks(level, patternMatch); // Paper - moved down
+         golem.snapTo(spawnPos.getX() + 0.5, spawnPos.getY() + 0.05, spawnPos.getZ() + 0.5, 0.0F, 0.0F);
+         // Paper start
+diff --git a/net/minecraft/world/level/block/WitherSkullBlock.java b/net/minecraft/world/level/block/WitherSkullBlock.java
+index 6cabc49464d34cb5282b7fa3bcfee20953d7e347..ad7303e83a3a33b263d182097c082887b3afce2f 100644
+--- a/net/minecraft/world/level/block/WitherSkullBlock.java
++++ b/net/minecraft/world/level/block/WitherSkullBlock.java
+@@ -61,7 +61,6 @@ public class WitherSkullBlock extends SkullBlock {
+                         );
+                         witherBoss.yBodyRot = match.getForwards().getAxis() == Direction.Axis.X ? 0.0F : 90.0F;
+                         witherBoss.makeInvulnerable();
+-                        witherBoss.setSummoner(blockState.getBlock().placer == null ? null : blockState.getBlock().placer.getUUID()); // Purpur - Summoner API
+                         // Paper start
+                         if (!new io.papermc.paper.event.entity.EntityConstructEvent(witherBoss.getBukkitEntity(), org.bukkit.craftbukkit.block.CraftBlock.getMatchingBlocks(level, match)).callEvent()) {
+                             return;

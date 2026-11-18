@@ -53,10 +53,10 @@ index c25cbb8a798e244776c012877b9c6625f43104b3..44c077e68376dc0b636fe77d26565059
      }
  }
 diff --git a/net/minecraft/advancements/triggers/SimpleCriterionTrigger.java b/net/minecraft/advancements/triggers/SimpleCriterionTrigger.java
-index 4926a3d0324c217eef1e6b1db01315ea8707cdae..c14f510a3811e0500b4d089368333a57d12bd717 100644
+index 2ede5c48f4b58704667054ce910d927dacfd3687..19ada64f34dc381b596e93b83ea9437149e00641 100644
 --- a/net/minecraft/advancements/triggers/SimpleCriterionTrigger.java
 +++ b/net/minecraft/advancements/triggers/SimpleCriterionTrigger.java
-@@ -29,6 +29,13 @@ public abstract class SimpleCriterionTrigger<T extends SimpleCriterionTrigger.Si
+@@ -30,6 +30,13 @@ public abstract class SimpleCriterionTrigger<T extends SimpleCriterionTrigger.Si
              LootContext playerContext = null; // EntityPredicate.createContext(player, player); // Paper - Perf: lazily create LootContext for criterions
              List<PlayerAdvancements.TriggerInstanceKey> matchedConditions = null;
  
@@ -70,7 +70,7 @@ index 4926a3d0324c217eef1e6b1db01315ea8707cdae..c14f510a3811e0500b4d089368333a57
              for (Entry<PlayerAdvancements.TriggerInstanceKey, T> entry : listenersForType.entrySet()) {
                  T value = entry.getValue();
                  if (matcher.test(value)) {
-@@ -42,6 +49,12 @@ public abstract class SimpleCriterionTrigger<T extends SimpleCriterionTrigger.Si
+@@ -43,6 +50,12 @@ public abstract class SimpleCriterionTrigger<T extends SimpleCriterionTrigger.Si
                      }
                  }
              }
@@ -84,10 +84,10 @@ index 4926a3d0324c217eef1e6b1db01315ea8707cdae..c14f510a3811e0500b4d089368333a57
              if (matchedConditions != null) {
                  for (PlayerAdvancements.TriggerInstanceKey criterion : matchedConditions) {
 diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
-index 4030776c3d12f8e797720180e141322b5d2cc548..9f3a925e96c996d85865b01dd715418ce506d79a 100644
+index a9e39e90216a057fc2ea3f2650bb78f81f790a80..8bb3e6845cc26847259d342b876e9ca793dfb9ee 100644
 --- a/net/minecraft/server/level/ServerPlayer.java
 +++ b/net/minecraft/server/level/ServerPlayer.java
-@@ -209,6 +209,11 @@ import org.slf4j.Logger;
+@@ -213,6 +213,11 @@ import org.slf4j.Logger;
  public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patches.chunk_system.player.ChunkSystemServerPlayer { // Paper - rewrite chunk system
      private static final Logger LOGGER = LogUtils.getLogger();
      public long lastSave = MinecraftServer.currentTick; // Paper - Incremental chunk and player saving

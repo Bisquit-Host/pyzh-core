@@ -41,10 +41,10 @@ index 9526f091bdde7f91a8e1d437e8faaecbeec63bf1..f39fa5d2ac0b005ed8f62774211f4ade
                      }
  
 diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
-index 97ddbe649d849441d8e10694ab35b579ac716979..ed86146aa8a58d7af68f800897297b79180a401c 100644
+index 05b8c3180cd804be7c74331fcb24be7cdf476d35..cc18abf176c671905f769d8fb1930168db4d6d28 100644
 --- a/net/minecraft/world/entity/LivingEntity.java
 +++ b/net/minecraft/world/entity/LivingEntity.java
-@@ -4137,7 +4137,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -4108,7 +4108,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
          final org.dreeam.leaf.world.EntityPushState pushState = this.level().pushEntityQueryState;
          pushState.reset(this, maxCramming, maxEntityCollisions);
          try {
@@ -53,7 +53,7 @@ index 97ddbe649d849441d8e10694ab35b579ac716979..ed86146aa8a58d7af68f800897297b79
          // Leaf end - Limit pushable entity queries
          if (pushState.foundAny) { // Leaf - Limit pushable entity queries
              // Leaf start - Limit pushable entity queries
-@@ -4351,7 +4351,12 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -4329,7 +4329,12 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
      // CraftBukkit start - collidable API
      @Override
      public boolean canCollideWithBukkit(Entity entity) {

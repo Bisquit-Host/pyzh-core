@@ -10,10 +10,10 @@ keep their last lookup as one immutable snapshot of scoreboard, count,
 name instance and team, reused while all three match.
 
 diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
-index 0ac10f8283ebf0f897a9df1c6ec0e4bd7a2f732b..0418b394ed94ecfd7f940c8e8cfa0c2ab0bdd740 100644
+index baa66320f2b8f773add39133f835b476e9ccb8f8..fb792e0acb87a017e9e43d094a3ced3ef36b9dee 100644
 --- a/net/minecraft/world/entity/Entity.java
 +++ b/net/minecraft/world/entity/Entity.java
-@@ -3968,9 +3968,25 @@ public abstract class Entity
+@@ -4086,9 +4086,25 @@ public abstract class Entity
      public void updateDynamicGameEventListener(final BiConsumer<DynamicGameEventListener<?>, ServerLevel> action) {
      }
  
@@ -41,7 +41,7 @@ index 0ac10f8283ebf0f897a9df1c6ec0e4bd7a2f732b..0418b394ed94ecfd7f940c8e8cfa0c2a
  
      public final boolean isAlliedTo(final @Nullable Entity other) {
 diff --git a/net/minecraft/world/scores/Scoreboard.java b/net/minecraft/world/scores/Scoreboard.java
-index 4a15851bda30c918c58c96d2cb98b74f30db396c..921514c0041c3ffb7bc9caa4f3b0f15ab9a5378c 100644
+index ccff13ea50431fbde5b1e0238a8534fab06aa786..a147635f7f6d58aab5c0423455579ec146a8811a 100644
 --- a/net/minecraft/world/scores/Scoreboard.java
 +++ b/net/minecraft/world/scores/Scoreboard.java
 @@ -36,6 +36,7 @@ public class Scoreboard {
@@ -59,8 +59,8 @@ index 4a15851bda30c918c58c96d2cb98b74f30db396c..921514c0041c3ffb7bc9caa4f3b0f15a
 +        this.pyzh$teamMembershipChanges++; // Pyzh - Cache entity team lookups
  
          this.onTeamRemoved(team);
-     }
-@@ -275,6 +277,7 @@ public class Scoreboard {
+         team.getPlayers().clear(); // Paper - Clear scoreboard team entries on unregister
+@@ -276,6 +278,7 @@ public class Scoreboard {
          }
  
          this.teamsByPlayer.put(player, team);
@@ -68,7 +68,7 @@ index 4a15851bda30c918c58c96d2cb98b74f30db396c..921514c0041c3ffb7bc9caa4f3b0f15a
          return team.getPlayers().add(player);
      }
  
-@@ -294,6 +297,7 @@ public class Scoreboard {
+@@ -295,6 +298,7 @@ public class Scoreboard {
          }
  
          this.teamsByPlayer.remove(player);

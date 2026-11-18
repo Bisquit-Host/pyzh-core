@@ -6,10 +6,10 @@ Subject: [PATCH] Restore Paper plugin API contracts
 Preserve tile counts, event thread checks, block break defaults and inventory validation. Restore smooth teleport state on every exit, honor the entity cache switch and retain the Spigot unknown-command field and setting.
 
 diff --git a/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java b/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java
-index 6df123b41169ef2eb8af12ece86e4d7208022f1e..beb8a4864b3409b4e1e7010f3f6b6fd4af1842a5 100644
+index 877a03efd60d6d63c36497af3a3d7ed951309108..caf254617f02b8529a7978dac66b13a0a3fe6995 100644
 --- a/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java
 +++ b/src/main/java/io/papermc/paper/plugin/manager/PaperEventManager.java
-@@ -35,16 +35,15 @@ class PaperEventManager {
+@@ -34,16 +34,15 @@ class PaperEventManager {
  
      // SimplePluginManager
      public void callEvent(@NotNull Event event) {
@@ -26,14 +26,14 @@ index 6df123b41169ef2eb8af12ece86e4d7208022f1e..beb8a4864b3409b4e1e7010f3f6b6fd4
 +        RegisteredListener[] listeners = event.getHandlers().getRegisteredListeners();
 +        if (listeners.length == 0) return;
 +
-         // Leaves start - skip photographer
-         if (event instanceof org.bukkit.event.player.PlayerEvent playerEvent && playerEvent.getPlayer() instanceof org.leavesmc.leaves.entity.photographer.Photographer) {
-             return;
+         for (RegisteredListener registration : listeners) {
+             if (!registration.getPlugin().isEnabled()) {
+                 continue;
 diff --git a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
-index 9bb0d58be45b82019540ad7ac8e80fec1ab0b17e..7e20baf5f649075d00bc8d2afe5b6a304b7d2a60 100644
+index 6884036fc61ca533af60e74c2dd62c42051f0811..393de8e5a2153fa9b31a883ba95f84f45d7ef1a1 100644
 --- a/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
 +++ b/src/main/java/org/bukkit/craftbukkit/CraftWorld.java
-@@ -223,7 +223,6 @@ public class CraftWorld extends CraftRegionAccessor implements World {
+@@ -226,7 +226,6 @@ public class CraftWorld extends CraftRegionAccessor implements World {
  
      @Override
      public int getTileEntityCount() {
@@ -42,10 +42,10 @@ index 9bb0d58be45b82019540ad7ac8e80fec1ab0b17e..7e20baf5f649075d00bc8d2afe5b6a30
          int size = 0;
          for (ChunkHolder playerchunk : ca.spottedleaf.moonrise.common.PlatformHooks.get().getVisibleChunkHolders(this.world)) {
 diff --git a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
-index 16af5e2b2663b38db4921b2edae2ea54c25b14e8..1a7c645e6510f7eade5519cf54bfd80269dab96e 100644
+index 9dfa44b425979f218a62be02c008fe7dfc458737..ea64fbef724428c596fc54e346dffa714ef56a60 100644
 --- a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
 +++ b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
-@@ -654,17 +654,14 @@ public class CraftBlock implements Block {
+@@ -655,17 +655,14 @@ public class CraftBlock implements Block {
              } else {
                  org.bukkit.Bukkit.getLogger().log(java.util.logging.Level.WARNING, "PWT: Attempted breakNaturally on non-ServerLevel - safety not guaranteed.");
              }
@@ -95,10 +95,10 @@ index af3e1ed5cb3c5cdd00f492078548a86895348d99..e9406d46af0ee4a1d0c472e407470c51
      }
  
 diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
-index bd2b11116b98ca0712d8ecf44c1b022253a3a715..628917ab65cc38d764e468a601e6f95e63bea2dd 100644
+index b2c1e3daf1b4c2c45248d992e02664ffaa87806b..92e33ce64e8d19811b2dffcbcb190294eba5ae7a 100644
 --- a/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
 +++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftPlayer.java
-@@ -1394,18 +1394,25 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
+@@ -1395,18 +1395,25 @@ public class CraftPlayer extends CraftHumanEntity implements Player, PluginMessa
      @Override
      public void teleportWithoutRespawn(Location location) {
          ServerPlayer serverPlayer = getHandle();
@@ -130,10 +130,10 @@ index bd2b11116b98ca0712d8ecf44c1b022253a3a715..628917ab65cc38d764e468a601e6f95e
      // Slice end
  
 diff --git a/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java b/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java
-index ebbb143547ba577ced90b353508feebfb0cb6e33..7239d5fa2a6d481570d43ec811a2dfd1bf370e0e 100644
+index 9d121ea6af9143f2e567e97432288579cf4e7e33..c5d4bfefaaa14052731c8ef7da8f693cdb78cc20 100644
 --- a/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java
 +++ b/src/main/java/org/bukkit/craftbukkit/inventory/CraftInventory.java
-@@ -85,7 +85,11 @@ public class CraftInventory implements Inventory {
+@@ -86,7 +86,11 @@ public class CraftInventory implements Inventory {
  
      @Override
      public void setContents(ItemStack[] items) {

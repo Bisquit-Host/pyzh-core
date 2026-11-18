@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Tue, 17 Nov 2026 17:59:04 +0300
+Subject: [PATCH] Skip move event allocations without observers
+
+Avoid Location and event construction when no move listener is registered and the player is not AFK. Preserve all position snaps and the original listener/AFK branch. Keep event-position thresholds, activity resets and the bit-exact post-teleport acceptance check.
+
+A 100,000-step differential test compares the history, activity and teleport handling with the old Location-based logic.
+
+Combined waypoint and no-listener movement changes, six interleaved players-moving runs per jar: 9.436 -> 7.058 ms/tick, -25.20% with a 95% half-width of 1.13 percentage points. Main-thread allocation: 9165.735 -> 5007.162 KiB/tick, -45.37% with a 95% half-width of 0.61 points. Exact digests match. All six other scenarios passed two runs per jar without digest drift or a significant performance difference. One optimized target run logged a pre-event movement-validation rejection whose physical cause was not reconstructed. All six original pairs are retained in the statistics and the warning is documented in the report.
+
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index 38a68707fa7188a12d93f99feffb9bb910fd3f91..a21bb9d862152f958af8220f5c65b967574e9f4b 100644
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -1770,6 +1770,11 @@ public class ServerGamePacketListenerImpl
+                         this.lastXRot = startXRot;
+                         this.hasMoved = true;
+                     }
++                    // Pyzh start - Avoid unobserved move event allocations
++                    if (PlayerMoveEvent.getHandlerList().getRegisteredListeners().length == 0 && !this.player.isAfk()) {
++                        if (!this.updateMoveEventPosition(targetX, targetY, targetZ, targetYRot, targetXRot)) return;
++                    } else {
++                    // Pyzh end - Avoid unobserved move event allocations
+                     Location from = new Location(player.getWorld(), this.lastPosX, this.lastPosY, this.lastPosZ, this.lastYRot, this.lastXRot); // Get the Players previous Event location.
+                     Location to = new Location(player.getWorld(), targetX, targetY, targetZ, targetYRot, targetXRot);
+ 
+@@ -1810,6 +1815,7 @@ public class ServerGamePacketListenerImpl
+                             return;
+                         }
+                     }
++                    } // Pyzh - Avoid unobserved move event allocations
+                     // Paper end
+                     this.player.absSnapTo(targetX, targetY, targetZ, targetYRot, targetXRot);
+                     boolean isAutoSpinAttack = this.player.isAutoSpinAttack();
+@@ -1859,6 +1865,35 @@ public class ServerGamePacketListenerImpl
+         }
+     }
+ 
++    // Pyzh start - Avoid unobserved move event allocations
++    // Returns false when the original post-teleport location check would discard the move.
++    private boolean updateMoveEventPosition(final double x, final double y, final double z, final float yaw, final float pitch) {
++        double delta = Mth.square(this.lastPosX - x) + Mth.square(this.lastPosY - y) + Mth.square(this.lastPosZ - z);
++        float deltaAngle = Math.abs(Mth.wrapDegrees(this.lastYRot - yaw)) + Math.abs(this.lastXRot - pitch);
++        if ((delta > 1.0F / 256 || deltaAngle > 10.0F) && !this.player.isImmobile()) {
++            boolean discardAfterTeleport = this.justTeleported && (
++                Double.doubleToLongBits(this.lastPosX) != Double.doubleToLongBits(this.player.getX())
++                    || Double.doubleToLongBits(this.lastPosY) != Double.doubleToLongBits(this.player.getY())
++                    || Double.doubleToLongBits(this.lastPosZ) != Double.doubleToLongBits(this.player.getZ())
++                    || Float.floatToIntBits(this.lastYRot) != Float.floatToIntBits(this.player.getBukkitYaw())
++                    || Float.floatToIntBits(this.lastXRot) != Float.floatToIntBits(this.player.getXRot()));
++            boolean activity = Mth.floor(x) != Mth.floor(this.lastPosX) || Mth.floor(y) != Mth.floor(this.lastPosY)
++                || Mth.floor(z) != Mth.floor(this.lastPosZ) || yaw != this.lastYRot || pitch != this.lastXRot;
++            this.lastPosX = x;
++            this.lastPosY = y;
++            this.lastPosZ = z;
++            this.lastYRot = yaw;
++            this.lastXRot = pitch;
++            if (activity) this.player.resetLastActionTime();
++            if (discardAfterTeleport) {
++                this.justTeleported = false;
++                return false;
++            }
++        }
++        return true;
++    }
++    // Pyzh end - Avoid unobserved move event allocations
++
+     // Purpur start - Dont run with scissors!
+     public boolean isScissors(ItemStack stack) {
+         if (!stack.is(Items.SHEARS)) return false;

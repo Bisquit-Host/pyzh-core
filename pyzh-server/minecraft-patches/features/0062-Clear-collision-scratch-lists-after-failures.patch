@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:47:35 +0300
+Subject: [PATCH] Clear collision scratch lists after failures
+
+Release all level-owned collision scratch lists in a finally block.
+Exceptions must not contaminate the next entity's collision query.
+
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index e0cbac43180defa20b823810b99c2728faafb21c..40862adeb6d1960620866070e4e5259911fd85c4 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -1830,59 +1830,60 @@ public abstract class Entity
+         }
+ 
+         org.dreeam.leaf.world.EntityCollisionCache entityCollisionCache = ((ServerLevel) this.level).entityCollisionCache; // Leaf - cache collision list
+-        // Vanilla expands the entity query by maxUpStep: the step logic below tests raised positions, so
+-        // entities fully above this entity's hitbox must be fetched for those checks (MC-310289). When
+-        // there is no horizontal movement the step logic cannot run, so keep the smaller query.
+-        final AABB entityQueryBox = (xZero & zZero) ? initialCollisionBox
+-            : initialCollisionBox.expandTowards(0.0, (double)this.maxUpStep(), 0.0);
+-        ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.getEntityHardCollisions(
+-            this.level, (Entity)(Object)this, entityQueryBox, entityCollisionCache.entityAABBs(), 0, null // Leaf - cache collision list
+-        );
++        try {
++            // Vanilla expands the entity query by maxUpStep: the step logic below tests raised positions, so
++            // entities fully above this entity's hitbox must be fetched for those checks (MC-310289). When
++            // there is no horizontal movement the step logic cannot run, so keep the smaller query.
++            final AABB entityQueryBox = (xZero & zZero) ? initialCollisionBox
++                : initialCollisionBox.expandTowards(0.0, (double)this.maxUpStep(), 0.0);
++            ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.getEntityHardCollisions(
++                this.level, (Entity)(Object)this, entityQueryBox, entityCollisionCache.entityAABBs(), 0, null // Leaf - cache collision list
++            );
+ 
+-        ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.getCollisionsForBlocksOrWorldBorder(
+-            this.level, (Entity)(Object)this, initialCollisionBox, entityCollisionCache.potentialCollisionsVoxel(), entityCollisionCache.potentialCollisionsBB(), // Leaf - cache collision list
+-            ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.COLLISION_FLAG_CHECK_BORDER, null
+-        );
+-        entityCollisionCache.potentialCollisionsBB().addAll(entityCollisionCache.entityAABBs()); // Leaf - cache collision list
+-        final Vec3 collided = ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.performCollisions(movement, currentBox, entityCollisionCache.potentialCollisionsVoxel(), entityCollisionCache.potentialCollisionsBB()); // Leaf - cache collision list
++            ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.getCollisionsForBlocksOrWorldBorder(
++                this.level, (Entity)(Object)this, initialCollisionBox, entityCollisionCache.potentialCollisionsVoxel(), entityCollisionCache.potentialCollisionsBB(), // Leaf - cache collision list
++                ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.COLLISION_FLAG_CHECK_BORDER, null
++            );
++            entityCollisionCache.potentialCollisionsBB().addAll(entityCollisionCache.entityAABBs()); // Leaf - cache collision list
++            final Vec3 collided = ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.performCollisions(movement, currentBox, entityCollisionCache.potentialCollisionsVoxel(), entityCollisionCache.potentialCollisionsBB()); // Leaf - cache collision list
+ 
+-        final boolean collidedX = collided.x != movement.x;
+-        final boolean collidedY = collided.y != movement.y;
+-        final boolean collidedZ = collided.z != movement.z;
++            final boolean collidedX = collided.x != movement.x;
++            final boolean collidedY = collided.y != movement.y;
++            final boolean collidedZ = collided.z != movement.z;
+ 
+-        final boolean collidedDownwards = collidedY && movement.y < 0.0;
++            final boolean collidedDownwards = collidedY && movement.y < 0.0;
+ 
+-        final double stepHeight;
++            final double stepHeight;
+ 
+-        if ((!collidedDownwards && !this.onGround()) || (!collidedX && !collidedZ) || (stepHeight = (double)this.maxUpStep()) <= 0.0) {
+-            entityCollisionCache.clear(); // Leaf - cache collision list
+-            return collided;
+-        }
++            if ((!collidedDownwards && !this.onGround()) || (!collidedX && !collidedZ) || (stepHeight = (double)this.maxUpStep()) <= 0.0) {
++                return collided;
++            }
+ 
+-        final AABB collidedYBox = collidedDownwards ? currentBox.move(0.0, collided.y, 0.0) : currentBox;
+-        AABB stepRetrievalBox = collidedYBox.expandTowards(movement.x, stepHeight, movement.z);
+-        if (!collidedDownwards) {
+-            stepRetrievalBox = stepRetrievalBox.expandTowards(0.0, (double)-1.0E-5F, 0.0);
+-        }
++            final AABB collidedYBox = collidedDownwards ? currentBox.move(0.0, collided.y, 0.0) : currentBox;
++            AABB stepRetrievalBox = collidedYBox.expandTowards(movement.x, stepHeight, movement.z);
++            if (!collidedDownwards) {
++                stepRetrievalBox = stepRetrievalBox.expandTowards(0.0, (double)-1.0E-5F, 0.0);
++            }
+ 
+-        final List<VoxelShape> stepVoxels = new ArrayList<>();
+-        final List<AABB> stepAABBs = entityCollisionCache.entityAABBs(); // Leaf // Leaf - cache collision list
++            final List<VoxelShape> stepVoxels = new ArrayList<>();
++            final List<AABB> stepAABBs = entityCollisionCache.entityAABBs(); // Leaf // Leaf - cache collision list
+ 
+-        ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.getCollisionsForBlocksOrWorldBorder(
+-            this.level, (Entity)(Object)this, stepRetrievalBox, stepVoxels, stepAABBs,
+-            ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.COLLISION_FLAG_CHECK_BORDER, null
+-        );
++            ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.getCollisionsForBlocksOrWorldBorder(
++                this.level, (Entity)(Object)this, stepRetrievalBox, stepVoxels, stepAABBs,
++                ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.COLLISION_FLAG_CHECK_BORDER, null
++            );
+ 
+-        for (final float step : calculateStepHeights(collidedYBox, stepVoxels, stepAABBs, (float)stepHeight, (float)collided.y)) {
+-            final Vec3 stepResult = ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.performCollisions(new Vec3(movement.x, (double)step, movement.z), collidedYBox, stepVoxels, stepAABBs);
+-            if (stepResult.horizontalDistanceSqr() > collided.horizontalDistanceSqr()) {
+-                entityCollisionCache.clear(); // Leaf - cache collision list
+-                return stepResult.add(0.0, collidedYBox.minY - currentBox.minY, 0.0);
++            for (final float step : calculateStepHeights(collidedYBox, stepVoxels, stepAABBs, (float)stepHeight, (float)collided.y)) {
++                final Vec3 stepResult = ca.spottedleaf.moonrise.patches.collisions.CollisionUtil.performCollisions(new Vec3(movement.x, (double)step, movement.z), collidedYBox, stepVoxels, stepAABBs);
++                if (stepResult.horizontalDistanceSqr() > collided.horizontalDistanceSqr()) {
++                    return stepResult.add(0.0, collidedYBox.minY - currentBox.minY, 0.0);
++                }
+             }
+-        }
+ 
+-        entityCollisionCache.clear(); // Leaf - cache collision list
+-        return collided;
++            return collided;
++        } finally {
++            entityCollisionCache.clear(); // Leaf - cache collision list
++        }
+         // Paper end - optimise collisions
+     }
+ 

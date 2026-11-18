@@ -5,12 +5,12 @@ Subject: [PATCH] Compress player NBT on the player IO thread
 
 
 diff --git a/net/minecraft/world/level/storage/PlayerDataStorage.java b/net/minecraft/world/level/storage/PlayerDataStorage.java
-index e7f931b1f7adac7fc3e372334277457553deaed7..2bcd7664d4d329dd25422076c0620b952fa81cd9 100644
+index 2d64d34d754463ee1007c69636ac5690fcca3d85..e9c4c8be0ffc9cd87c78dbbbff20c319b52c13bd 100644
 --- a/net/minecraft/world/level/storage/PlayerDataStorage.java
 +++ b/net/minecraft/world/level/storage/PlayerDataStorage.java
-@@ -52,19 +52,12 @@ public class PlayerDataStorage {
+@@ -50,19 +50,12 @@ public class PlayerDataStorage {
+     public void save(final String playerName, final java.util.UUID uniqueId, final String stringId, final CompoundTag compoundTag) {
          if (org.spigotmc.SpigotConfig.disablePlayerDataSaving) return; // Pyzh - apply persistence guards to offline/generic saves too
-         if (org.dreeam.leaf.config.modules.misc.RegionFormatConfig.isReadOnlyMode()) return; // Pyzh - preserve read-only mode for offline updates
  
 -        var nbtBytes = new it.unimi.dsi.fastutil.io.FastByteArrayOutputStream(65536);
 -        try {
@@ -31,7 +31,7 @@ index e7f931b1f7adac7fc3e372334277457553deaed7..2bcd7664d4d329dd25422076c0620b95
                  Path realFile = playerDirPath.resolve(stringId + ".dat");
                  Path oldFile = playerDirPath.resolve(stringId + ".dat_old");
                  Util.safeReplaceFile(realFile, tmpFile, oldFile);
-@@ -97,13 +90,9 @@ public class PlayerDataStorage {
+@@ -95,13 +88,9 @@ public class PlayerDataStorage {
      private Optional<CompoundTag> load(final NameAndId nameAndId, final String suffix) {
          // Pyzh start - read the latest accepted save without waiting for disk I/O
          if (suffix.equals(".dat")) {

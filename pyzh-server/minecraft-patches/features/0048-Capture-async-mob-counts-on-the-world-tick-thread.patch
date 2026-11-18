@@ -1,0 +1,207 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:46:28 +0300
+Subject: [PATCH] Capture async mob counts on the world tick thread
+
+Aggregate immutable entity count inputs on the worker and publish through a future that also records failures. Rebuild failed counts synchronously before spawning and always tick chunk bookkeeping while a result is pending. Restore Paper shuffle-seed consumption.
+
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+index 20641a630fa71ab7b2f94f9b2d68ad2cbb296a58..499f1d25c8f42fbd1216a7ecbb473d0d6f376e0c 100644
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -74,8 +74,7 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+     private final Set<ChunkHolder> chunkHoldersToBroadcast = new ReferenceOpenHashSet<>();
+     @VisibleForDebug
+     private NaturalSpawner.@Nullable SpawnState lastSpawnState;
+-    private volatile NaturalSpawner.@Nullable SpawnState asyncSpawnState; // Leaf - Pufferfish - async mob spawning
+-    private boolean spawnCountPending; // Leaf - Pufferfish - async mob spawning
++    private @Nullable CompletableFuture<NaturalSpawner.SpawnState> pendingSpawnState; // Leaf - Pufferfish - async mob spawning
+     private NaturalSpawner.@Nullable AsyncSpawnCostSampler asyncSpawnCostSampler; // Leaf - Pufferfish - async mob spawning
+     // Paper start
+     public final ca.spottedleaf.concurrentutil.map.concurrent.longs.ConcurrentChainedLong2ReferenceHashTable<net.minecraft.world.level.chunk.LevelChunk> fullChunks = ca.spottedleaf.concurrentutil.map.concurrent.longs.ConcurrentChainedLong2ReferenceHashTable.createWithCapacity(ca.spottedleaf.concurrentutil.map.concurrent.longs.ConcurrentChainedLong2ReferenceHashTable.defaultCapacity(), 0.25f);
+@@ -585,27 +584,50 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+     }
+     // Leaf end - Pufferfish - async mob spawning
+ 
+-    private void tickChunks(final ProfilerFiller profiler) {
+-        profiler.push("naturalSpawnCount");
+-        int chunkCount = this.distanceManager.getNaturalSpawnChunkCount();
+-        // Leaf start - Pufferfish - async mob spawning
+-        boolean asyncCountMobs = org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled
+-            && this.level.paperConfig().entities.spawning.perPlayerMobSpawns && (this.spawnFriendlies || this.spawnEnemies);
+-        // Leaf end - Pufferfish - async mob spawning
++    // Leaf start - Pufferfish - async mob spawning
++    // Returns null while an async count is still pending. A failed async count is rebuilt synchronously.
++    private NaturalSpawner.@Nullable SpawnState createSpawnState(final int chunkCount, final boolean asyncCountMobs) {
++        NaturalSpawner.SpawnState spawnCookie = null;
++        if (!asyncCountMobs) {
++            this.pendingSpawnState = null;
++        }
+         // Paper start - Optional per player mob spawns
+-        NaturalSpawner.@Nullable SpawnState spawnCookie = null; // Leaf - Pufferfish - async mob spawning
+         if ((this.spawnFriendlies || this.spawnEnemies) && this.level.paperConfig().entities.spawning.perPlayerMobSpawns) { // don't count mobs when animals and monsters are disabled
+-            // Leaf start - Pufferfish - async mob spawning
+-            if (!asyncCountMobs) {
++            if (asyncCountMobs && this.pendingSpawnState != null) {
++                if (this.pendingSpawnState.isDone()) {
++                    try {
++                        spawnCookie = this.pendingSpawnState.join();
++                    } catch (java.util.concurrent.CompletionException exception) {
++                        LOGGER.warn("Async mob counting failed; rebuilding spawn counts on the tick thread", exception.getCause());
++                    } finally {
++                        this.pendingSpawnState = null;
++                    }
++                    if (spawnCookie != null) {
++                        this.updatePerPlayerMobCount();
++                        spawnCookie.applyPerPlayerMobCount(this.level);
++                    }
++                }
++            }
++            if (spawnCookie == null && this.pendingSpawnState == null) {
+                 this.updatePerPlayerMobCount();
+                 spawnCookie = NaturalSpawner.createState(chunkCount, this.level, this::getFullChunk, null, true);
+             }
+-            // Leaf end - Pufferfish - async mob spawning
+         } else {
+             spawnCookie = NaturalSpawner.createState(chunkCount, this.level, this::getFullChunk, !this.level.paperConfig().entities.spawning.perPlayerMobSpawns ? new LocalMobCapCalculator(this.chunkMap) : null, false);
+         }
+         // Paper end - Optional per player mob spawns
+-        if (spawnCookie != null) this.lastSpawnState = spawnCookie; // Leaf - Pufferfish - async mob spawning
++        return spawnCookie;
++    }
++    // Leaf end - Pufferfish - async mob spawning
++
++    private void tickChunks(final ProfilerFiller profiler) {
++        profiler.push("naturalSpawnCount");
++        // Leaf start - Pufferfish - async mob spawning
++        boolean asyncCountMobs = org.dreeam.leaf.config.modules.async.AsyncMobSpawning.enabled
++            && this.level.paperConfig().entities.spawning.perPlayerMobSpawns && (this.spawnFriendlies || this.spawnEnemies);
++        NaturalSpawner.@Nullable SpawnState spawnCookie = this.createSpawnState(this.distanceManager.getNaturalSpawnChunkCount(), asyncCountMobs);
++        if (spawnCookie != null) this.lastSpawnState = spawnCookie;
++        // Leaf end - Pufferfish - async mob spawning
+         boolean doMobSpawning = this.level.getGameRules().get(GameRules.SPAWN_MOBS) && !this.level.players().isEmpty(); // CraftBukkit
+         int tickSpeed = this.level.getGameRules().get(GameRules.RANDOM_TICK_SPEED);
+         boolean spawnPersistent = false; // Leaf - Pufferfish - async mob spawning
+@@ -628,30 +650,15 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+             if (org.dreeam.leaf.config.modules.opt.OptimizeMobSpawning.enabled) { this.level.natureSpawnChunkMap.tick(this.level, spawningChunks); } else { this.chunkMap.collectSpawningChunks(spawningChunks); } // Leaf - optimize mob spawning
+             profiler.popPush("shuffleSpawningChunks");
+             // Paper start - chunk tick iteration optimisation
+-            // Leaf start - paw optimization - Only set seed if is really used
+-            if (!this.level.paperConfig().entities.spawning.perPlayerMobSpawns) {
+             this.shuffleRandom.setSeed(this.level.getRandom().nextLong());
+-            Util.shuffle(spawningChunks, this.level.getRandom()); // Paper - Optional per player mob spawns; do not need this when per-player is enabled
++            if (!this.level.paperConfig().entities.spawning.perPlayerMobSpawns) {
++                Util.shuffle(spawningChunks, this.level.getRandom()); // Paper - Optional per player mob spawns; do not need this when per-player is enabled
+             }
+-            // Leaf end - paw optimization - Only set seed if is really used
+             // Paper end - chunk tick iteration optimisation
+             profiler.popPush("tickSpawningChunks");
+ 
+             // Leaf start - Pufferfish - async mob spawning
+-            NaturalSpawner.@Nullable SpawnState completedSpawnState = this.asyncSpawnState;
+-            if (completedSpawnState != null) {
+-                this.asyncSpawnState = null;
+-                this.spawnCountPending = false;
+-                if (asyncCountMobs) {
+-                    spawnCookie = completedSpawnState;
+-                    this.lastSpawnState = spawnCookie;
+-                }
+-            }
+             if (spawnCookie != null) {
+-                if (asyncCountMobs) {
+-                    this.updatePerPlayerMobCount();
+-                    spawnCookie.applyPerPlayerMobCount(this.level);
+-                }
+                 List<MobCategory> spawningCategories = doMobSpawning && (this.spawnEnemies || this.spawnFriendlies)
+                     ? NaturalSpawner.getFilteredSpawningCategories(spawnCookie, this.spawnFriendlies, this.spawnEnemies, spawnPersistent, this.level) : List.of();
+                 // Leaf start - optimize mob spawning
+@@ -685,19 +692,18 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+         }
+ 
+         // Leaf start - Pufferfish - async mob spawning
+-        if (asyncCountMobs && !this.spawnCountPending) {
++        // Entity inputs are captured on the tick thread; only the aggregation runs on the spawn executor.
++        if (asyncCountMobs && this.pendingSpawnState == null) {
+             profiler.popPush("prepareAsyncSpawnCount");
+             if (this.asyncSpawnCostSampler == null) {
+                 this.asyncSpawnCostSampler = new NaturalSpawner.AsyncSpawnCostSampler(this.level);
+             }
+             int spawnableChunkCount = this.distanceManager.getNaturalSpawnChunkCount();
+-            Iterable<Entity> entities = this.level.getAllEntities();
++            List<NaturalSpawner.SpawnCountInput> inputs = NaturalSpawner.captureSpawnCounts(this.level.getAllEntities(), this.level);
+             net.minecraft.world.attribute.EnvironmentAttributeReader environmentAttributes = this.asyncSpawnCostSampler.capture();
+-            boolean countAllMobsForSpawning = this.level.paperConfig().entities.spawning.countAllMobsForSpawning;
+-            this.spawnCountPending = true;
+-            this.level.getServer().mobSpawnExecutor.submit(() -> {
+-                this.asyncSpawnState = NaturalSpawner.createStateAsync(spawnableChunkCount, entities, this.level, environmentAttributes, countAllMobsForSpawning);
+-            });
++            this.pendingSpawnState = CompletableFuture.supplyAsync(
++                () -> NaturalSpawner.createStateAsync(spawnableChunkCount, inputs, environmentAttributes), this.level.getServer().mobSpawnExecutor::submit
++            );
+         }
+         // Leaf end - Pufferfish - async mob spawning
+ 
+diff --git a/net/minecraft/world/level/NaturalSpawner.java b/net/minecraft/world/level/NaturalSpawner.java
+index f9c12fbb316a190880f5ed4b5531243b0e956368..d3c7b58a639752c247a3885c49d6d4779577f82b 100644
+--- a/net/minecraft/world/level/NaturalSpawner.java
++++ b/net/minecraft/world/level/NaturalSpawner.java
+@@ -123,12 +123,16 @@ public final class NaturalSpawner {
+     }
+ 
+     // Leaf start - Pufferfish - async mob spawning
+-    public static SpawnState createStateAsync(
+-        final int spawnableChunkCount, final Iterable<Entity> entities, final ServerLevel level, final EnvironmentAttributeReader environmentAttributes, final boolean countAllMobsForSpawning
+-    ) {
+-        PotentialCalculator spawnPotential = new PotentialCalculator();
+-        Object2IntOpenHashMap<MobCategory> mobCounts = new Object2IntOpenHashMap<>();
+-        it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<int[]> chunkCap = new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
++    public record SpawnCountInput(BlockPos pos, EntityType<?> type, MobCategory category, long chunkKey) {
++        public SpawnCountInput {
++            pos = pos.immutable();
++        }
++    }
++
++    // Runs on the world tick thread: entities and chunk maps are only read here.
++    public static List<SpawnCountInput> captureSpawnCounts(final Iterable<Entity> entities, final ServerLevel level) {
++        List<SpawnCountInput> inputs = new ArrayList<>();
++        boolean countAllMobsForSpawning = level.paperConfig().entities.spawning.countAllMobsForSpawning;
+         for (Entity entity : entities) {
+             if (entity instanceof Mob mob && (mob.isPersistenceRequired() || mob.requiresCustomPersistence())) {
+                 continue;
+@@ -144,16 +148,27 @@ public final class NaturalSpawner {
+             }
+             BlockPos pos = entity.blockPosition();
+             long chunkKey = ChunkPos.pack(pos);
+-            LevelChunk chunk = level.getChunkSource().fullChunks.get(chunkKey);
+-            if (chunk != null) {
+-                MobSpawnSettings naturalMobSpawns = environmentAttributes.getValue(EnvironmentAttributes.NATURAL_MOB_SPAWNS, pos);
+-                MobSpawnSettings.MobSpawnCost cost = naturalMobSpawns.getMobSpawnCost(entity.getType());
+-                if (cost != null) {
+-                    spawnPotential.addCharge(pos, cost.charge());
+-                }
+-                mobCounts.addTo(category, 1);
+-                ++chunkCap.computeIfAbsent(chunkKey, key -> new int[net.minecraft.server.level.ServerPlayer.MOBCATEGORY_TOTAL_ENUMS])[category.ordinal()];
++            if (level.getChunkSource().fullChunks.get(chunkKey) != null) {
++                inputs.add(new SpawnCountInput(pos, entity.getType(), category, chunkKey));
++            }
++        }
++        return inputs;
++    }
++
++    public static SpawnState createStateAsync(
++        final int spawnableChunkCount, final List<SpawnCountInput> inputs, final EnvironmentAttributeReader environmentAttributes
++    ) {
++        PotentialCalculator spawnPotential = new PotentialCalculator();
++        Object2IntOpenHashMap<MobCategory> mobCounts = new Object2IntOpenHashMap<>();
++        it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<int[]> chunkCap = new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
++        for (SpawnCountInput input : inputs) {
++            MobSpawnSettings naturalMobSpawns = environmentAttributes.getValue(EnvironmentAttributes.NATURAL_MOB_SPAWNS, input.pos());
++            MobSpawnSettings.MobSpawnCost cost = naturalMobSpawns.getMobSpawnCost(input.type());
++            if (cost != null) {
++                spawnPotential.addCharge(input.pos(), cost.charge());
+             }
++            mobCounts.addTo(input.category(), 1);
++            ++chunkCap.computeIfAbsent(input.chunkKey(), key -> new int[net.minecraft.server.level.ServerPlayer.MOBCATEGORY_TOTAL_ENUMS])[input.category().ordinal()];
+         }
+         return new SpawnState(spawnableChunkCount, mobCounts, spawnPotential, null, chunkCap);
+     }

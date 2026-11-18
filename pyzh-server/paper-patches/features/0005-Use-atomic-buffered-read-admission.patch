@@ -6,10 +6,10 @@ Subject: [PATCH] Use atomic buffered read admission
 Route buffered block reads through the world lifecycle gate so shutdown cannot strand a request.
 
 diff --git a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
-index 711874c5758ad168d58250eb919ade4831043494..97678ec493ff00a3514c819260afbd4b48972fba 100644
+index 2dfa8287fc54c5c8527c2f5149dbfa2d6f570b80..77d45dbe04e4314079202f62d3aed1676f0f0f1e 100644
 --- a/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
 +++ b/src/main/java/org/bukkit/craftbukkit/block/CraftBlock.java
-@@ -115,12 +115,8 @@ public class CraftBlock implements Block {
+@@ -118,12 +118,8 @@ public class CraftBlock implements Block {
          java.util.concurrent.CompletableFuture<Object> future = new java.util.concurrent.CompletableFuture<>();
  
          // Shutdown handling for async reads - start

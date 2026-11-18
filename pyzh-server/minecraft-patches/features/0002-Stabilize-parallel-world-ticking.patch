@@ -6,16 +6,17 @@ Subject: [PATCH] Stabilize parallel world ticking
 Join every submitted world tick before propagating failures and serialize buffered-read admission with world closure.
 
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
-index dd55fbb07c5ff763eae7570f6cb06df17daf5844..36a766c57d78a906b461bde2c197d9ba877ab4eb 100644
+index ff638fd0b45d010bcd9f9caa080b00aac0e0d03b..f243127ff254816f3496320d5ca5fbff5829da19 100644
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -1937,50 +1937,97 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1918,51 +1918,98 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
  
          this.isIteratingOverLevels = true; // Paper - Throw exception on world create while being ticked
          // Leaf start - SparklyPaper - parallel world ticking
--        java.util.ArrayDeque<java.util.concurrent.Future<ServerLevel>> tasks = new java.util.ArrayDeque<>();
 +        record WorldTickTask(ServerLevel level, java.util.concurrent.Future<?> future) {}
-+        java.util.ArrayDeque<WorldTickTask> tasks = new java.util.ArrayDeque<>();
+         final boolean parallelWorldTicking = org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled; // Leaf - Avoid allocating world tick queue without PWT
+-        final java.util.ArrayDeque<java.util.concurrent.Future<ServerLevel>> tasks = parallelWorldTicking ? new java.util.ArrayDeque<>() : null; // Leaf - Avoid allocating world tick queue without PWT
++        final java.util.ArrayDeque<WorldTickTask> tasks = parallelWorldTicking ? new java.util.ArrayDeque<>() : null; // Leaf - Avoid allocating world tick queue without PWT
 +        Throwable tickFailure = null;
 +        boolean interrupted = false;
          try {
@@ -28,7 +29,7 @@ index dd55fbb07c5ff763eae7570f6cb06df17daf5844..36a766c57d78a906b461bde2c197d9ba
 -            profiler.push(() -> level + " " + level.dimension().identifier());
 -            profiler.push("tick");
 -
--            if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
+-            if (parallelWorldTicking) { // Leaf - Avoid allocating world tick queue without PWT
 -                serverLevelTickingSemaphore.acquire();
 -                tasks.add(
 -                    level.tickExecutor.submit(() -> {
@@ -55,7 +56,7 @@ index dd55fbb07c5ff763eae7570f6cb06df17daf5844..36a766c57d78a906b461bde2c197d9ba
 +                profiler.push(() -> level + " " + level.dimension().identifier());
 +                profiler.push("tick");
 +
-+                if (org.dreeam.leaf.config.modules.async.SparklyPaperParallelWorldTicking.enabled) {
++                if (parallelWorldTicking) { // Leaf - Avoid allocating world tick queue without PWT
 +                    serverLevelTickingSemaphore.acquire();
 +                    final java.util.concurrent.Future<?> future;
 +                    try {
@@ -94,7 +95,7 @@ index dd55fbb07c5ff763eae7570f6cb06df17daf5844..36a766c57d78a906b461bde2c197d9ba
 +        } catch (Throwable throwable) {
 +            tickFailure = throwable;
 +        } finally {
-             while (!tasks.isEmpty()) {
+             while (tasks != null && !tasks.isEmpty()) { // Leaf - Avoid allocating world tick queue without PWT
 -                final ServerLevel serverLevel = tasks.poll().get(); // Leaf - thread unsafe chunk map
 -                serverLevel.getChunkSource().fullChunksNonSync.setThread(); // Leaf - thread unsafe chunk map
 -                serverLevel.moonrise$getChunkTaskScheduler().chunkHolderManager.chunkHoldersNoSync.setThread(); // Leaf - thread unsafe chunk map
@@ -146,10 +147,10 @@ index dd55fbb07c5ff763eae7570f6cb06df17daf5844..36a766c57d78a906b461bde2c197d9ba
          if (org.dreeam.leaf.config.modules.async.MultithreadedTracker.enabled) { for (ServerLevel world : getAllLevels()) { world.leaf$asyncTracker.onTickEnd(); } } // Leaf - Multithreaded tracker
  
 diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
-index 8ab5d05bd88acfa21bc0237e3556b441c5425dea..6536adbf3092c526d0da8cbd5c6b66ac05ba85dd 100644
+index 7c73f5373d741c5703fff7f5e6eb66d6916b6d8f..a6ce9ae3741cfd59c972c2556e9f442163253427 100644
 --- a/net/minecraft/server/level/ServerLevel.java
 +++ b/net/minecraft/server/level/ServerLevel.java
-@@ -224,6 +224,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -226,6 +226,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
      // Leaf start - SparklyPaper - parallel world ticking
      public final java.util.concurrent.ExecutorService tickExecutor;
      public final java.util.concurrent.ConcurrentLinkedQueue<org.dreeam.leaf.async.world.WorldReadRequest> asyncReadRequestQueue;
@@ -157,7 +158,7 @@ index 8ab5d05bd88acfa21bc0237e3556b441c5425dea..6536adbf3092c526d0da8cbd5c6b66ac
      private volatile boolean isShuttingDown = false; // Shutdown handling for async reads
      // Leaf end - SparklyPaper - parallel world ticking
  
-@@ -875,13 +876,31 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -879,13 +880,31 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
          return this.isShuttingDown;
      }
  
@@ -194,7 +195,7 @@ index 8ab5d05bd88acfa21bc0237e3556b441c5425dea..6536adbf3092c526d0da8cbd5c6b66ac
          }
          if (clearedRequests > 0) {
              MinecraftServer.LOGGER.info("PWT: Cleared {} pending async read requests for world {} during shutdown.", clearedRequests, this.getWorld().getName());
-@@ -892,10 +911,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+@@ -896,10 +915,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
      // Leaf start - SparklyPaper - parallel world ticking
      private void processAsyncReadRequests() {
          // Clear queue if buffering gets disabled to prevent memory leaks

@@ -5,10 +5,10 @@ Subject: [PATCH] Apply Pyzh runtime branding
 
 
 diff --git a/src/main/java/io/papermc/paper/PaperServerInternalAPIBridge.java b/src/main/java/io/papermc/paper/PaperServerInternalAPIBridge.java
-index b791bbfb838c067d33f88f2063c0d6d6a6c892ef..4bd8aea01531da9867807ad74af2c87560a027c4 100644
+index d4b06f17f53f00f8284f439d04b77efec3cc2186..b392e64d27f05446a2d4971a30785e164e9c1d6a 100644
 --- a/src/main/java/io/papermc/paper/PaperServerInternalAPIBridge.java
 +++ b/src/main/java/io/papermc/paper/PaperServerInternalAPIBridge.java
-@@ -181,7 +181,7 @@ public class PaperServerInternalAPIBridge implements InternalAPIBridge {
+@@ -203,7 +203,7 @@ public class PaperServerInternalAPIBridge implements InternalAPIBridge {
  
      @Override
      public VersionFetcher getVersionFetcher() {

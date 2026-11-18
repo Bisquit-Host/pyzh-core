@@ -27,7 +27,7 @@ index 93c2e47e4860a27156ddf1434bd9c1e5a6eba744..7467ad66cc182cce3aaa6dec1ae963a1
 +    }
  }
 diff --git a/net/minecraft/network/syncher/SynchedEntityData.java b/net/minecraft/network/syncher/SynchedEntityData.java
-index da7820e97c641dde7e7f1b00c803c3a232cfc073..01abf2b727fd6821a615a24bc6f8fbf24efbe59d 100644
+index b4769bd6e91e20df4b586544b24e77745bff6c0a..dce5ef397ff8dc04abcce0450111897bf456bd29 100644
 --- a/net/minecraft/network/syncher/SynchedEntityData.java
 +++ b/net/minecraft/network/syncher/SynchedEntityData.java
 @@ -61,7 +61,7 @@ public class SynchedEntityData {
@@ -49,18 +49,18 @@ index da7820e97c641dde7e7f1b00c803c3a232cfc073..01abf2b727fd6821a615a24bc6f8fbf2
  
      public static class Builder {
 diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
-index 0418b394ed94ecfd7f940c8e8cfa0c2ab0bdd740..0cc656758088300cabb2e9636309f7731832b631 100644
+index fb792e0acb87a017e9e43d094a3ced3ef36b9dee..750f287ae30b149b7aecfe211ba6a723da107836 100644
 --- a/net/minecraft/world/entity/Entity.java
 +++ b/net/minecraft/world/entity/Entity.java
-@@ -628,6 +628,7 @@ public abstract class Entity
+@@ -632,6 +632,7 @@ public abstract class Entity
          entityDataBuilder.define(DATA_TICKS_FROZEN, 0);
          this.defineSynchedData(entityDataBuilder);
          this.entityData = entityDataBuilder.build();
 +        this.pyzh$loadSyncedMirrors(); // Pyzh - Mirror hot synced entity data
+         this.interpolationHandler = this.createInterpolationHandler();
          this.setPos(0.0, 0.0, 0.0);
          this.eyeHeight = this.dimensions.eyeHeight();
-         this.despawnTime = level == null || type == EntityTypes.PLAYER ? -1 : level.paperConfig().entities.spawning.despawnTime.getOrDefault(type, io.papermc.paper.configuration.type.number.IntOr.Disabled.DISABLED).or(-1); // Paper - entity despawn time limit
-@@ -821,7 +822,7 @@ public abstract class Entity
+@@ -827,7 +828,7 @@ public abstract class Entity
      }
  
      public Pose getPose() {
@@ -69,7 +69,7 @@ index 0418b394ed94ecfd7f940c8e8cfa0c2ab0bdd740..0cc656758088300cabb2e9636309f773
      }
  
      public boolean hasPose(final Pose pose) {
-@@ -2196,7 +2197,7 @@ public abstract class Entity
+@@ -2257,7 +2258,7 @@ public abstract class Entity
      }
  
      public boolean isNoGravity() {
@@ -78,7 +78,7 @@ index 0418b394ed94ecfd7f940c8e8cfa0c2ab0bdd740..0cc656758088300cabb2e9636309f773
      }
  
      public void setNoGravity(final boolean noGravity) {
-@@ -4010,11 +4011,11 @@ public abstract class Entity
+@@ -4128,11 +4129,11 @@ public abstract class Entity
      }
  
      public boolean getSharedFlag(final @Entity.Flags int flag) {
@@ -92,7 +92,7 @@ index 0418b394ed94ecfd7f940c8e8cfa0c2ab0bdd740..0cc656758088300cabb2e9636309f773
          if (value) {
              this.entityData.set(DATA_SHARED_FLAGS_ID, (byte)(currentValue | 1 << flag));
          } else {
-@@ -4027,7 +4028,7 @@ public abstract class Entity
+@@ -4145,7 +4146,7 @@ public abstract class Entity
      }
  
      public int getAirSupply() {
@@ -101,7 +101,7 @@ index 0418b394ed94ecfd7f940c8e8cfa0c2ab0bdd740..0cc656758088300cabb2e9636309f773
      }
  
      public void setAirSupply(final int supply) {
-@@ -4053,9 +4054,43 @@ public abstract class Entity
+@@ -4171,9 +4172,43 @@ public abstract class Entity
      }
  
      public int getTicksFrozen() {
@@ -147,10 +147,10 @@ index 0418b394ed94ecfd7f940c8e8cfa0c2ab0bdd740..0cc656758088300cabb2e9636309f773
          this.entityData.set(DATA_TICKS_FROZEN, ticks);
      }
 diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
-index 9d2ed7d8cf419e4f89d2f3cd57c3d11c3088e75c..97ddbe649d849441d8e10694ab35b579ac716979 100644
+index 82d397d78a1a5f22963ad2db293f599ee3334a9e..05b8c3180cd804be7c74331fcb24be7cdf476d35 100644
 --- a/net/minecraft/world/entity/LivingEntity.java
 +++ b/net/minecraft/world/entity/LivingEntity.java
-@@ -312,23 +312,33 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -311,23 +311,33 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
      protected boolean shouldBurnInDay = false; public boolean shouldBurnInDay() { return this.shouldBurnInDay; } public void setShouldBurnInDay(boolean shouldBurnInDay) { this.shouldBurnInDay = shouldBurnInDay; } // Purpur - API for any mob to burn daylight
      // CraftBukkit end
  
@@ -195,7 +195,7 @@ index 9d2ed7d8cf419e4f89d2f3cd57c3d11c3088e75c..97ddbe649d849441d8e10694ab35b579
          this.attributes = new AttributeMap(DefaultAttributes.getSupplier(type), this); // Purpur - Ridables
          this.initAttributes(); // Purpur - Configurable entity base attributes
          this.craftAttributes = new org.bukkit.craftbukkit.attribute.CraftAttributeMap(this.attributes); // CraftBukkit
-@@ -1458,7 +1468,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -1449,7 +1459,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
              return (float) player.getBukkitEntity().getHealth();
          }
          // CraftBukkit end
@@ -204,7 +204,7 @@ index 9d2ed7d8cf419e4f89d2f3cd57c3d11c3088e75c..97ddbe649d849441d8e10694ab35b579
      }
  
      // Paper start - Check for NaN
-@@ -4876,7 +4886,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+@@ -4884,7 +4894,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
      }
  
      public Optional<BlockPos> getSleepingPos() {
@@ -214,10 +214,10 @@ index 9d2ed7d8cf419e4f89d2f3cd57c3d11c3088e75c..97ddbe649d849441d8e10694ab35b579
  
      public void setSleepingPos(final BlockPos bedPosition) {
 diff --git a/net/minecraft/world/entity/Mob.java b/net/minecraft/world/entity/Mob.java
-index 5838d9605c6885e06c40b014fb8bcb47b32f1da0..848a5543a80b96481a029df73d30e5d5122fb72d 100644
+index 864af151e87de80536aa91d64a98b2e5c27761b0..9bd42097a5fdaef37e88a1d352707bed5549a349 100644
 --- a/net/minecraft/world/entity/Mob.java
 +++ b/net/minecraft/world/entity/Mob.java
-@@ -1561,30 +1561,49 @@ public abstract class Mob extends LivingEntity implements Targeting, EquipmentUs
+@@ -1568,30 +1568,49 @@ public abstract class Mob extends LivingEntity implements Targeting, EquipmentUs
      }
  
      public void setNoAi(final boolean flag) {
@@ -274,10 +274,10 @@ index 5838d9605c6885e06c40b014fb8bcb47b32f1da0..848a5543a80b96481a029df73d30e5d5
  
      public void setBaby(final boolean baby) {
 diff --git a/net/minecraft/world/entity/item/ItemEntity.java b/net/minecraft/world/entity/item/ItemEntity.java
-index 4af419e983c0fc2afc2a7040af1e85617f3a0e02..0648c0059b98be2047d4c321c933789599512b53 100644
+index a4a5cec975824890d6a41df17a36ae40cf9148fc..1a1a652f3f9684a25635c9102c49e31bddd8a5ee 100644
 --- a/net/minecraft/world/entity/item/ItemEntity.java
 +++ b/net/minecraft/world/entity/item/ItemEntity.java
-@@ -540,9 +540,28 @@ public class ItemEntity extends Entity implements TraceableEntity, net.caffeinem
+@@ -533,9 +533,28 @@ public class ItemEntity extends Entity implements TraceableEntity, net.caffeinem
      }
  
      public ItemStack getItem() {

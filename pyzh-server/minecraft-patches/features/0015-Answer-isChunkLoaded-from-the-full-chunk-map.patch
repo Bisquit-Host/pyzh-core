@@ -11,10 +11,10 @@ FULL, onChunkPostNotBorder right before it drops), with no plugin code
 in between, so its lookup gives the same answer.
 
 diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
-index 3e593b17ead582b9d0c36c6fad51a0e0b10f0ed9..a6dddcd0d9f2c8eb9b90f9dc2f7e54ec0cf7d7a4 100644
+index cc305c6644af627d25d839e00cd7047cb21bb72d..20641a630fa71ab7b2f94f9b2d68ad2cbb296a58 100644
 --- a/net/minecraft/server/level/ServerChunkCache.java
 +++ b/net/minecraft/server/level/ServerChunkCache.java
-@@ -249,11 +249,8 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
+@@ -251,11 +251,8 @@ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moon
  
      // CraftBukkit start - properly implement isChunkLoaded
      public boolean isChunkLoaded(int chunkX, int chunkZ) {

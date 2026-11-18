@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:47:35 +0300
+Subject: [PATCH] Preserve gliders only for Purpur elytra damage
+
+Restore Paper's normal glider break events and callbacks. Cap Purpur's
+gliding and boost damage at the last durability point so existing elytra
+settings remain safe without a new configuration option.
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index ed84da80fb85d6b9634ab4d35bb1e398f42df9d7..827951b14954d1aaa6788d53aaa80f46599cc938 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -4068,7 +4068,9 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+                             damage *= (int) speed;
+                         }
+                     }
+-                    this.getItemBySlot(slotToDamage).hurtAndBreak(damage, this, slotToDamage);
++                    ItemStack glideItem = this.getItemBySlot(slotToDamage);
++                    damage = Math.min(damage, Math.max(0, glideItem.getMaxDamage() - 1 - glideItem.getDamageValue()));
++                    glideItem.hurtAndBreak(damage, this, slotToDamage);
+                     // Purpur end - Implement elytra settings
+                 }
+ 
+diff --git a/net/minecraft/world/item/FireworkRocketItem.java b/net/minecraft/world/item/FireworkRocketItem.java
+index 4f49e12017cfff46c147aab41cc832b749bc8f5b..adcc04e0b7bad2b330f3ff2b4fd93f16ab9354c0 100644
+--- a/net/minecraft/world/item/FireworkRocketItem.java
++++ b/net/minecraft/world/item/FireworkRocketItem.java
+@@ -80,7 +80,8 @@ public class FireworkRocketItem extends Item implements ProjectileItem {
+ 
+                         ItemStack glideItem = player.getItemBySlot(enumitemslot);
+                         if (player.canGlide()) {
+-                            glideItem.hurtAndBreak(level.purpurConfig.elytraDamagePerFireworkBoost, player, enumitemslot);
++                            int damage = Math.min(level.purpurConfig.elytraDamagePerFireworkBoost, Math.max(0, glideItem.getMaxDamage() - 1 - glideItem.getDamageValue()));
++                            glideItem.hurtAndBreak(damage, player, enumitemslot);
+                         }
+                     }
+                     // Purpur end - Implement elytra settings
+diff --git a/net/minecraft/world/item/ItemStack.java b/net/minecraft/world/item/ItemStack.java
+index f9a0e3fee0b234c9ef9fdcba35a0b64389d01e4b..9ee71d0e006a4ee77ce10c8c4e571e4a49db8ec3 100644
+--- a/net/minecraft/world/item/ItemStack.java
++++ b/net/minecraft/world/item/ItemStack.java
+@@ -706,13 +706,6 @@ public final class ItemStack implements DataComponentHolder, ItemInstance, net.c
+             }
+             // CraftBukkit end
+ 
+-            // Purpur start - Implement elytra settings
+-            if (this.has(DataComponents.GLIDER)) {
+-                setDamageValue(this.getMaxDamage() - 1);
+-                return;
+-            }
+-            // Purpur end - Implement elytra settings
+-
+             this.shrink(1);
+             onBreak.accept(broken);
+         }
+diff --git a/net/minecraft/world/item/TridentItem.java b/net/minecraft/world/item/TridentItem.java
+index 12a14fa6073206dd3a28ad7cfd704d13c1c6798f..cd4e266f1f290cff5ec15c053dffb619690ef368 100644
+--- a/net/minecraft/world/item/TridentItem.java
++++ b/net/minecraft/world/item/TridentItem.java
+@@ -133,7 +133,8 @@ public class TridentItem extends Item implements ProjectileItem {
+                                 net.minecraft.world.entity.EquipmentSlot enumitemslot = net.minecraft.util.Util.getRandom(list, entity.getRandom()); // Leaf - fix build
+                                 ItemStack glideItem = entity.getItemBySlot(enumitemslot);
+                                 if (glideItem.has(net.minecraft.core.component.DataComponents.GLIDER) && level.purpurConfig.elytraDamagePerTridentBoost > 0) {
+-                                    glideItem.hurtAndBreak(level.purpurConfig.elytraDamagePerTridentBoost, entity, enumitemslot);
++                                    int damage = Math.min(level.purpurConfig.elytraDamagePerTridentBoost, Math.max(0, glideItem.getMaxDamage() - 1 - glideItem.getDamageValue()));
++                                    glideItem.hurtAndBreak(damage, entity, enumitemslot);
+                                 }
+                             }
+                             // Purpur end - Implement elytra settings

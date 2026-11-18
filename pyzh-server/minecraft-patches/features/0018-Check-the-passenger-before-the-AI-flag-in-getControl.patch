@@ -9,10 +9,10 @@ synced flag first. Both checks are side-effect free, so testing the
 passenger first gives the same result.
 
 diff --git a/net/minecraft/world/entity/Mob.java b/net/minecraft/world/entity/Mob.java
-index 1af4548347100f66ebbebba665e24b2b80d70500..5838d9605c6885e06c40b014fb8bcb47b32f1da0 100644
+index 1add5ca9829a07f09fde4bc4eb0964e9103612b1..864af151e87de80536aa91d64a98b2e5c27761b0 100644
 --- a/net/minecraft/world/entity/Mob.java
 +++ b/net/minecraft/world/entity/Mob.java
-@@ -246,7 +246,7 @@ public abstract class Mob extends LivingEntity implements Targeting, EquipmentUs
+@@ -251,7 +251,7 @@ public abstract class Mob extends LivingEntity implements Targeting, EquipmentUs
      @Override
      public @Nullable LivingEntity getControllingPassenger() {
          Entity firstPassenger = this.getFirstPassenger();

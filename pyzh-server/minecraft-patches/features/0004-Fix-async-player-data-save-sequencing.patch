@@ -6,10 +6,10 @@ Subject: [PATCH] Fix async player data save sequencing
 Sequence saves per UUID without blocking the caller, isolate level data I/O, serve pending snapshots to readers, and drain accepted writes before storage shutdown.
 
 diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
-index 31d2e284a6c44de67de10c122875e76f76be9451..1a548c13eff115054b5ce4ad73f4e069f7fc8362 100644
+index 9a803bcc32727ad712ad2d8325daec72fb3eebaf..989cfecb214f6f08a3991de574dba0234ae73b50 100644
 --- a/net/minecraft/server/MinecraftServer.java
 +++ b/net/minecraft/server/MinecraftServer.java
-@@ -1134,6 +1134,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+@@ -1123,6 +1123,9 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
  
          this.saveAllChunks(false, true, false, true); // Paper - rewrite chunk system
  
@@ -20,10 +20,10 @@ index 31d2e284a6c44de67de10c122875e76f76be9451..1a548c13eff115054b5ce4ad73f4e069
          this.savedDataStorage.close();
          this.resources.close();
 diff --git a/net/minecraft/world/level/storage/LevelStorageSource.java b/net/minecraft/world/level/storage/LevelStorageSource.java
-index fcf09561b22e6253b2e27e4f9e1f3967b3702d1a..d183e4930e3860292881e3443de108659b762de5 100644
+index 3fa69608fbc348df64d4e08baf60b7a2d455a392..ce129261983fb147aa8544a8bf2c2e5603803d39 100644
 --- a/net/minecraft/world/level/storage/LevelStorageSource.java
 +++ b/net/minecraft/world/level/storage/LevelStorageSource.java
-@@ -606,16 +606,23 @@ public class LevelStorageSource {
+@@ -632,16 +632,23 @@ public class LevelStorageSource {
                  NbtIo.writeCompressed(root, nbtBytes);
              } catch (Exception e) {
                  LevelStorageSource.LOGGER.error("Failed to encode level {}", worldDir, e);
@@ -51,7 +51,7 @@ index fcf09561b22e6253b2e27e4f9e1f3967b3702d1a..d183e4930e3860292881e3443de10865
              });
              // Leaf end - Async playerdata saving
 diff --git a/net/minecraft/world/level/storage/PlayerDataStorage.java b/net/minecraft/world/level/storage/PlayerDataStorage.java
-index 68e63a5ee014d87c503858cc1a1ca63c9d4904c0..e7f931b1f7adac7fc3e372334277457553deaed7 100644
+index 1c1117f3e674ddd009fb1e580670e0140a22b1c0..2d64d34d754463ee1007c69636ac5690fcca3d85 100644
 --- a/net/minecraft/world/level/storage/PlayerDataStorage.java
 +++ b/net/minecraft/world/level/storage/PlayerDataStorage.java
 @@ -23,7 +23,6 @@ public class PlayerDataStorage {
@@ -62,12 +62,11 @@ index 68e63a5ee014d87c503858cc1a1ca63c9d4904c0..e7f931b1f7adac7fc3e3723342774575
  
      public PlayerDataStorage(final LevelStorageSource.LevelStorageAccess levelAccess, final DataFixer fixerUpper) {
          this.fixerUpper = fixerUpper;
-@@ -50,65 +49,34 @@ public class PlayerDataStorage {
+@@ -49,65 +48,33 @@ public class PlayerDataStorage {
  
      // Leaf start - Async playerdata saving
      public void save(final String playerName, final java.util.UUID uniqueId, final String stringId, final CompoundTag compoundTag) {
 +        if (org.spigotmc.SpigotConfig.disablePlayerDataSaving) return; // Pyzh - apply persistence guards to offline/generic saves too
-+        if (org.dreeam.leaf.config.modules.misc.RegionFormatConfig.isReadOnlyMode()) return; // Pyzh - preserve read-only mode for offline updates
 +
          var nbtBytes = new it.unimi.dsi.fastutil.io.FastByteArrayOutputStream(65536);
          try {
@@ -147,7 +146,7 @@ index 68e63a5ee014d87c503858cc1a1ca63c9d4904c0..e7f931b1f7adac7fc3e3723342774575
      }
      // Leaf end - Async playerdata saving
  
-@@ -127,7 +95,18 @@ public class PlayerDataStorage {
+@@ -126,7 +93,18 @@ public class PlayerDataStorage {
      }
  
      private Optional<CompoundTag> load(final NameAndId nameAndId, final String suffix) {

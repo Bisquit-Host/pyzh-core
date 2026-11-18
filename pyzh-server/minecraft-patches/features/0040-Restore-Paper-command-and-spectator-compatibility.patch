@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:56:57 +0300
+Subject: [PATCH] Restore Paper command and spectator compatibility
+
+Honor empty Spigot and Leaf unknown-command messages instead of emitting a message or blank line. Allow spectator menu teleports without the additional unregistered permission.
+
+diff --git a/net/minecraft/commands/Commands.java b/net/minecraft/commands/Commands.java
+index 54463658e325d5c07d43c85fbad7a8f0e98a54dc..9785065dc503e0e4daf70060123a5f60f5011bfa 100644
+--- a/net/minecraft/commands/Commands.java
++++ b/net/minecraft/commands/Commands.java
+@@ -683,13 +683,17 @@ public class Commands {
+     }
+ 
+     // Leaf start - Configurable unknown command message
+-    private static net.kyori.adventure.text.Component getUnknownCommandMessage(
++    private static net.kyori.adventure.text.@Nullable Component getUnknownCommandMessage(
+         final net.kyori.adventure.text.TextComponent.Builder builder, final CommandSyntaxException e, final String commandString
+     ) {
+         String rawMessage = org.dreeam.leaf.config.modules.misc.UnknownCommandMessage.unknownCommandMessage;
+ 
++        if (rawMessage.isEmpty()) {
++            return null;
++        }
++
+         if ("default".equals(rawMessage)) {
+-            return getVanillaUnknownCommandMessage(builder, e, commandString);
++            return org.spigotmc.SpigotConfig.unknownCommandMessage.isEmpty() ? null : getVanillaUnknownCommandMessage(builder, e, commandString);
+         }
+ 
+         net.kyori.adventure.text.Component messageComponent = null;
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index 4c3d981d1d6a63cafe4b8350ad527cb81f9b8d1f..38a68707fa7188a12d93f99feffb9bb910fd3f91 100644
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -2391,7 +2391,7 @@ public class ServerGamePacketListenerImpl
+     @Override
+     public void handleTeleportToEntityPacket(final ServerboundTeleportToEntityPacket packet) {
+         PacketUtils.ensureRunningOnSameThread(packet, this, this.player.level());
+-        if (this.player.isSpectator() && this.player.getBukkitEntity().hasPermission("purpur.spectator-can-teleport-to-players")) { // Purpur - Require permission for Spectator to teleport to players
++        if (this.player.isSpectator()) {
+             for (ServerLevel level : this.server.getAllLevels()) {
+                 Entity entity = packet.getEntity(level);
+                 if (entity != null) {

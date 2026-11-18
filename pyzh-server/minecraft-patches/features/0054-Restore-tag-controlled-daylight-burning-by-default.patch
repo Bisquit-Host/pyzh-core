@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TurboVadim <yolkin.vadim@gmail.com>
+Date: Mon, 16 Nov 2026 23:40:21 +0300
+Subject: [PATCH] Restore tag-controlled daylight burning by default
+
+Run the Paper daylight path at its original Mob tick location unless the wider Purpur API is enabled. Preserve Paper saved flags as a fallback and disable the inherited piglin flag for the opt-in path.
+
+diff --git a/net/minecraft/world/entity/LivingEntity.java b/net/minecraft/world/entity/LivingEntity.java
+index 3935bdc4557839a9fec1bc18f6df572bcded8eae..503f94b01d04c2e50b6630b9ebb519bf49a7d9d0 100644
+--- a/net/minecraft/world/entity/LivingEntity.java
++++ b/net/minecraft/world/entity/LivingEntity.java
+@@ -965,7 +965,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+             } // Paper - The sleeping pos will always also set the actual pos, so a desync suggests something is wrong
+         }, this::clearSleepingPos);
+         input.read("Brain", Brain.Packed.CODEC).ifPresent(packedBrain -> this.brain = this.makeBrain(packedBrain));
+-        this.shouldBurnInDay = input.getBooleanOr("Purpur.ShouldBurnInDay", this.shouldBurnInDay); // Purpur - API for any mob to burn daylight
++        this.shouldBurnInDay = input.getBooleanOr("Purpur.ShouldBurnInDay", this.shouldBurnInDay && input.getBooleanOr("Paper.ShouldBurnInDay", true)); // Purpur - API for any mob to burn daylight
+         this.lastHurtByPlayer = EntityReference.read(input, "last_hurt_by_player");
+         this.lastHurtByPlayerMemoryTime = input.getIntOr("last_hurt_by_player_memory_time", 0);
+         this.lastHurtByMob = EntityReference.read(input, "last_hurt_by_mob");
+@@ -4004,7 +4004,7 @@ public abstract class LivingEntity extends Entity implements Attackable, Waypoin
+         }
+ 
+         // Purpur start - copied from Mob - API for any mob to burn daylight
+-        if (this.isAlive()) {
++        if (this.level().purpurConfig.livingEntitiesBurnInDaylight && this.isAlive()) {
+             if (this.shouldBurnInDay() && this.isSunBurnTick()) { // Paper - shouldBurnInDay API // Purpur - use shouldBurnInDay() method to handle Phantoms properly - API for any mob to burn daylight
+                 EquipmentSlot slot = this.sunProtectionSlot();
+                 ItemStack sunBlocker = this.getItemBySlot(slot);
+diff --git a/net/minecraft/world/entity/Mob.java b/net/minecraft/world/entity/Mob.java
+index 9bd42097a5fdaef37e88a1d352707bed5549a349..72c0cbed84dfb6308d368554d631ab0086082335 100644
+--- a/net/minecraft/world/entity/Mob.java
++++ b/net/minecraft/world/entity/Mob.java
+@@ -563,9 +563,9 @@ public abstract class Mob extends LivingEntity implements Targeting, EquipmentUs
+     @Override
+     public void aiStep() {
+         super.aiStep();
+-        /*if (this.is(EntityTypeTags.BURN_IN_DAYLIGHT)) { // Purpur start - implemented in LivingEntity - API for any mob to burn daylight
++        if (!this.level().purpurConfig.livingEntitiesBurnInDaylight && this.is(EntityTypeTags.BURN_IN_DAYLIGHT)) {
+             this.burnUndead();
+-        }*/ // Purpur end - implemented in LivingEntity - API for any mob to burn daylight
++        }
+ 
+         ProfilerFiller profiler = Profiler.get();
+         profiler.push("looting");
+diff --git a/net/minecraft/world/entity/monster/Phantom.java b/net/minecraft/world/entity/monster/Phantom.java
+index df9f7ea921601693130ea9d4bd7f6a9438945fa5..58c64a32d679a8746dfaf9ec166efb82aecbf230 100644
+--- a/net/minecraft/world/entity/monster/Phantom.java
++++ b/net/minecraft/world/entity/monster/Phantom.java
+@@ -327,7 +327,7 @@ public class Phantom extends Mob implements Enemy {
+         output.putInt("size", this.getPhantomSize());
+         // Paper start
+         output.storeNullable("Paper.SpawningEntity", net.minecraft.core.UUIDUtil.CODEC, this.spawningEntity);
+-        //output.putBoolean("Paper.ShouldBurnInDay", this.shouldBurnInDay); // Purpur - implemented in LivingEntity - API for any mob to burn daylight
++        output.putBoolean("Paper.ShouldBurnInDay", this.shouldBurnInDay);
+         // Paper end
+     }
+ 
+diff --git a/net/minecraft/world/entity/monster/skeleton/AbstractSkeleton.java b/net/minecraft/world/entity/monster/skeleton/AbstractSkeleton.java
+index ea54b1d881abb45a166efb6a632027b1ff6c50b9..2966dc917c2b6148ff060cb54badd23b6eb16b54 100644
+--- a/net/minecraft/world/entity/monster/skeleton/AbstractSkeleton.java
++++ b/net/minecraft/world/entity/monster/skeleton/AbstractSkeleton.java
+@@ -259,7 +259,7 @@ public abstract class AbstractSkeleton extends Monster implements RangedAttackMo
+     @Override
+     protected void addAdditionalSaveData(final net.minecraft.world.level.storage.ValueOutput output) {
+         super.addAdditionalSaveData(output);
+-        //output.putBoolean("Paper.ShouldBurnInDay", this.shouldBurnInDay); // Purpur - implemented in LivingEntity - API for any mob to burn daylight
++        output.putBoolean("Paper.ShouldBurnInDay", this.shouldBurnInDay);
+     }
+     // Paper end - shouldBurnInDay API
+ }
+diff --git a/net/minecraft/world/entity/monster/zombie/Zombie.java b/net/minecraft/world/entity/monster/zombie/Zombie.java
+index 3359c1bd652624e6db9cc2387b847de0fcb60471..bf08da0623a7d5f4a1863dc56b53726e64ab2708 100644
+--- a/net/minecraft/world/entity/monster/zombie/Zombie.java
++++ b/net/minecraft/world/entity/monster/zombie/Zombie.java
+@@ -504,7 +504,7 @@ public class Zombie extends Monster {
+         output.putBoolean("IsBaby", this.isBaby());
+         output.putBoolean("CanBreakDoors", this.canBreakDoors());
+         this.drowningTracker.addAdditionalSaveData(output);
+-        //output.putBoolean("Paper.ShouldBurnInDay", this.shouldBurnInDay); // Paper - Add more Zombie API // Purpur - implemented in LivingEntity - API for any mob to burn daylight
++        output.putBoolean("Paper.ShouldBurnInDay", this.shouldBurnInDay); // Paper - Add more Zombie API
+     }
+ 
+     @Override
+diff --git a/net/minecraft/world/entity/monster/zombie/ZombifiedPiglin.java b/net/minecraft/world/entity/monster/zombie/ZombifiedPiglin.java
+index 842351864df5d0dab692edb166ec166259cb6511..ea18536caf8c3038539dc09b0d75da2177897db2 100644
+--- a/net/minecraft/world/entity/monster/zombie/ZombifiedPiglin.java
++++ b/net/minecraft/world/entity/monster/zombie/ZombifiedPiglin.java
+@@ -68,6 +68,11 @@ public class ZombifiedPiglin extends Zombie implements NeutralMob {
+         this.setPathfindingMalus(PathType.LAVA, 8.0F);
+     }
+ 
++    @Override
++    public boolean shouldBurnInDay() {
++        return false;
++    }
++
+     // Purpur start - Ridables
+     @Override
+     public boolean isRidable() {
+diff --git a/org/purpurmc/purpur/PurpurWorldConfig.java b/org/purpurmc/purpur/PurpurWorldConfig.java
+index 3c26b9c0a7432d7bc698768df6b388e711416fd9..4c65fb286b5aee374386665b258cf3af5d5591a9 100644
+--- a/org/purpurmc/purpur/PurpurWorldConfig.java
++++ b/org/purpurmc/purpur/PurpurWorldConfig.java
+@@ -162,6 +162,7 @@ public class PurpurWorldConfig {
+     public boolean imposeTeleportRestrictionsOnEndPortals = false;
+     public boolean tickFluids = true;
+     public double mobsBlindnessMultiplier = 1;
++    public boolean livingEntitiesBurnInDaylight = false;
+     public boolean mobsIgnoreRails = false;
+     public boolean rainStopsAfterSleep = true;
+     public boolean thunderStopsAfterSleep = true;
+@@ -221,6 +222,7 @@ public class PurpurWorldConfig {
+         imposeTeleportRestrictionsOnEndPortals = getBoolean("gameplay-mechanics.impose-teleport-restrictions-on-end-portals", imposeTeleportRestrictionsOnEndPortals);
+         tickFluids = getBoolean("gameplay-mechanics.tick-fluids", tickFluids);
+         mobsBlindnessMultiplier = getDouble("gameplay-mechanics.entity-blindness-multiplier", mobsBlindnessMultiplier);
++        livingEntitiesBurnInDaylight = getBoolean("gameplay-mechanics.living-entities-burn-in-daylight", livingEntitiesBurnInDaylight);
+         mobsIgnoreRails = getBoolean("gameplay-mechanics.mobs-ignore-rails", mobsIgnoreRails);
+         rainStopsAfterSleep = getBoolean("gameplay-mechanics.rain-stops-after-sleep", rainStopsAfterSleep);
+         thunderStopsAfterSleep = getBoolean("gameplay-mechanics.thunder-stops-after-sleep", thunderStopsAfterSleep);

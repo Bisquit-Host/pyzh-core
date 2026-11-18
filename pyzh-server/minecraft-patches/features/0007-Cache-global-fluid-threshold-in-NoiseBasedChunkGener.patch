@@ -5,10 +5,10 @@ Subject: [PATCH] Cache global fluid threshold in NoiseBasedChunkGenerator
 
 
 diff --git a/net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator.java b/net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator.java
-index 5469fc49b0835066d88caac23024ed664719d90c..bd63c65df895ce31083e6a1d6d7b2a18e49d7e64 100644
+index 9c82e9552c4c23ea080332c4c6f948b18810a12a..477642dc3f6ca7e4a274601c11c28dec272402ef 100644
 --- a/net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator.java
 +++ b/net/minecraft/world/level/levelgen/NoiseBasedChunkGenerator.java
-@@ -71,11 +71,13 @@ public final class NoiseBasedChunkGenerator extends ChunkGenerator {
+@@ -82,11 +82,13 @@ public final class NoiseBasedChunkGenerator extends ChunkGenerator {
          int seaLevel = settings.seaLevel();
          Aquifer.FluidStatus seaStatus = new Aquifer.FluidStatus(seaLevel, settings.defaultFluid());
          Aquifer.FluidStatus emptyStatus = new Aquifer.FluidStatus(DimensionType.MIN_Y * 2, Blocks.AIR.defaultBlockState());
