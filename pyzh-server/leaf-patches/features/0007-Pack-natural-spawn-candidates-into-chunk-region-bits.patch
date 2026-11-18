@@ -8,7 +8,7 @@ Store one 64-bit mask per 8x8 chunk region instead of hashing each eligible chun
 Preserve circular spawn ranges, player filtering, entity-ticking checks, and the nearest-player tree. The existing experimental optimize-mob-spawning setting still controls this path. Leaf's direct candidate collection is kept instead of scanning all loaded chunks.
 
 diff --git a/java/org/dreeam/leaf/world/NatureSpawnChunkMap.java b/java/org/dreeam/leaf/world/NatureSpawnChunkMap.java
-index 363da73c221ea457001bce3a1569e3d4590df1c3..a89787783c3e3c6f06441600e864094c5cb61f72 100644
+index 6aff6a2a2c6b47dc414430e9b5af48917b69b5f7..27821ffb8371a2259fdfd80cc3288d88520dba6a 100644
 --- a/java/org/dreeam/leaf/world/NatureSpawnChunkMap.java
 +++ b/java/org/dreeam/leaf/world/NatureSpawnChunkMap.java
 @@ -3,7 +3,7 @@ package org.dreeam.leaf.world;
@@ -21,7 +21,7 @@ index 363da73c221ea457001bce3a1569e3d4590df1c3..a89787783c3e3c6f06441600e864094c
  import net.minecraft.server.level.ServerLevel;
  import net.minecraft.server.level.ServerPlayer;
 @@ -36,30 +36,46 @@ public final class NatureSpawnChunkMap {
-     private static final double MAX_DIST = 16384.0;
+     private static final double MAX_DIST = 16384.0001;
  
      private final LongArrayList[] centersByRadius;
 -    private final LongSet set;
