@@ -50,10 +50,10 @@ index 0000000000000000000000000000000000000000..fa68a22be8478cc0a306500b2a035b2e
 +    }
 +}
 diff --git a/java/org/dreeam/leaf/util/LeafConstants.java b/java/org/dreeam/leaf/util/LeafConstants.java
-index c184f20519440c11171465a1b897afeb3a330864..ddd74fc1162ce1cd3ebed8166e470bf9e3c62d45 100644
+index fef77de8facd692571c130f9a5878b693ef8542d..09baf07ab937a2f8bceb81af03876ed7e9a94265 100644
 --- a/java/org/dreeam/leaf/util/LeafConstants.java
 +++ b/java/org/dreeam/leaf/util/LeafConstants.java
-@@ -5,14 +5,10 @@ public final class LeafConstants {
+@@ -5,12 +5,8 @@ public final class LeafConstants {
      private LeafConstants() {
      }
  
@@ -62,8 +62,6 @@ index c184f20519440c11171465a1b897afeb3a330864..ddd74fc1162ce1cd3ebed8166e470bf9
      public static final boolean ENABLE_IO_URING = Boolean.getBoolean("Leaf.enable-io-uring");
      public static final boolean ENABLE_BASE64CODER_WARNING = Boolean.getBoolean("Leaf.enable-base64coder-warning");
 -    public static final boolean DISABLE_VANILLA_DEBUG_FEATURE = Boolean.getBoolean("Leaf.disable-vanilla-debug-feature");
-     public static final String LINEAR_V2_READ_ONLY_FLAG = "Leaf.linear-v2-read-only";
-     public static final boolean LINEAR_V2_READ_ONLY = Boolean.getBoolean(LINEAR_V2_READ_ONLY_FLAG);
      public static final boolean ASYNC_TRACKER_PROTOCOL_LIB_FIX = Boolean.getBoolean("Leaf.async-tracker-protocol-lib-fix");
 -
 -    public static final String DISABLE_VANILLA_PROFILER_DOCS_URL = "https://www.leafmc.one/docs/config/system-properties#dleaf-disable-vanilla-profiler";

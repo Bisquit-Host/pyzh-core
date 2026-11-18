@@ -291,11 +291,11 @@ index 141ec7385b897df9e9cbcccce09578c84392830e..909b81182fd3bdba0aac2880557358f9
      }
  }
 diff --git a/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java b/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java
-index 37949132f4fe7c1b9ed6f64b5b87ab4dac1dc17f..e151ac52470bd174eb6f2cbd8a2c091644967751 100644
+index 5af8ab59a1677831a0a06331a5f1b97a6cf91c23..a0dd3bb525bdf04ec9031ed6c1ea6b0f783790ec 100644
 --- a/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java
 +++ b/java/org/dreeam/leaf/config/modules/async/SparklyPaperParallelWorldTicking.java
-@@ -15,11 +15,12 @@ public class SparklyPaperParallelWorldTicking extends ConfigModule {
-     @Experimental
+@@ -16,11 +16,12 @@ public class SparklyPaperParallelWorldTicking extends ConfigModule {
+     @Deprecated(forRemoval = true)
      public static boolean enabled = false;
      public static int threads = 8;
 +    private static boolean runtimeConfigurationInitialized;
@@ -308,7 +308,7 @@ index 37949132f4fe7c1b9ed6f64b5b87ab4dac1dc17f..e151ac52470bd174eb6f2cbd8a2c0916
  
      @Override
      public void onLoaded() {
-@@ -30,18 +31,26 @@ public class SparklyPaperParallelWorldTicking extends ConfigModule {
+@@ -31,18 +32,26 @@ public class SparklyPaperParallelWorldTicking extends ConfigModule {
                  **实验性功能**
                  启用并行世界处理以提高多核 CPU 使用率.""");
  

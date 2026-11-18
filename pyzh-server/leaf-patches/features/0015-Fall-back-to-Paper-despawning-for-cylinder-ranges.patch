@@ -6,7 +6,7 @@ Subject: [PATCH] Fall back to Paper despawning for cylinder ranges
 The spatial despawn tree uses spherical distance. Decline non-ellipsoid shapes so the existing per-entity path applies the configured geometry.
 
 diff --git a/java/org/dreeam/leaf/world/DespawnMap.java b/java/org/dreeam/leaf/world/DespawnMap.java
-index db90d7724c61fac8108207f4f4649149fbb801bc..e934f492b9ac9b85ad07b1883d9db37c25dd98d2 100644
+index 3e21ec2b8d68e486a8e52971f3080f260fb2b79f..ef061c9787fd92332add3dd5a0632ab6731990b2 100644
 --- a/java/org/dreeam/leaf/world/DespawnMap.java
 +++ b/java/org/dreeam/leaf/world/DespawnMap.java
 @@ -1,6 +1,7 @@
