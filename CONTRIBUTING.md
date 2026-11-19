@@ -122,13 +122,13 @@ Rejected hunks land in the patch set's `rejected/` directory.
 
 ### Gradle version
 
-The wrapper pins **9.4.1**, matching Leaf. Do not bump it casually.
+The wrapper pins **9.8.0** and paperweight-patcher **2.0.0-beta.24**, matching Leaf. Bump them
+together with Leaf, never separately.
 
-paperweight-patcher 2.0.0-beta.21 runs nested upstreams by reflectively calling the Gradle
-internal `NestedRootBuildRunner.runNestedRootBuild(String, StartParameterInternal,
-ServiceRegistry)`. Gradle 9.6.1 added a fourth `ClassPath` parameter, so the lookup throws
-`NoSuchMethodException` and every nested upstream fails. Since Pyzh's whole build depends on a
-nested upstream, a wrapper bump breaks the build outright.
+paperweight-patcher runs nested upstreams by reflectively calling the Gradle internal
+`NestedRootBuildRunner.runNestedRootBuild`. Its signature changes between Gradle releases
+(9.6.1 added a `ClassPath` parameter, which broke beta.21), so a Gradle version the patcher
+was not built for makes every nested upstream fail with `NoSuchMethodException`.
 
 ### patchRepo vs patchDir
 
