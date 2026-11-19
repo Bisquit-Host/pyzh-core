@@ -3,12 +3,12 @@ name: Build
 on:
   push:
     branches:
-      - ver/26.2
+      - ver/26.3
     tags:
       - "ver-*"
   pull_request:
     branches:
-      - ver/26.2
+      - ver/26.3
   workflow_dispatch:
 
 permissions:

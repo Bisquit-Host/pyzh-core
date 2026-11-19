@@ -1,6 +1,6 @@
 # Pyzh
 
-Pyzh is a Minecraft 26.2 server fork built on [Leaf](https://github.com/Winds-Studio/Leaf), which in turn builds on Paper and includes performance, gameplay, and compatibility patches from projects such as Purpur, Gale, and Pufferfish.
+Pyzh is a Minecraft 26.3 server fork built on [Leaf](https://github.com/Winds-Studio/Leaf), which in turn builds on Paper and includes performance, gameplay, and compatibility patches from projects such as Purpur, Gale, and Pufferfish.
 
 Leaf is consumed as a **paperweight upstream**, pinned by `leafCommit` in `gradle.properties`. Leaf's patches are not vendored here — paperweight clones Leaf at that commit, runs Leaf's own Paper application, and applies Pyzh's patches on top. Updating Leaf is a one-line property bump.
 
@@ -9,7 +9,7 @@ Leaf is consumed as a **paperweight upstream**, pinned by `leafCommit` in `gradl
 - Git
 - JDK 25
 
-The Gradle wrapper is included; a separate Gradle installation is not required. It pins Gradle 9.4.1 to match Leaf — see [CONTRIBUTING.md](CONTRIBUTING.md#gradle-version) for why this matters.
+The Gradle wrapper is included; a separate Gradle installation is not required. It pins Gradle 9.8.0 to match Leaf — see [CONTRIBUTING.md](CONTRIBUTING.md#gradle-version) for why this matters.
 
 ## Build
 
@@ -24,12 +24,12 @@ Two apply invocations are required: the first materialises the generated project
 The distributable server JAR is written to:
 
 ```text
-pyzh-server/build/libs/pyzh-paperclip-26.2.local-SNAPSHOT.jar
+pyzh-server/build/libs/pyzh-paperclip-26.3.local-SNAPSHOT.jar
 ```
 
-`Bukkit.getBukkitVersion()` reports `26.2-R0.1-SNAPSHOT` for plugin compatibility.
-Artifact versions stay separate: local builds use `26.2.local-SNAPSHOT`; CI builds use
-`26.2.build.<number>-alpha`, with `BUILD_NUMBER` set to the GitHub Actions run number.
+`Bukkit.getBukkitVersion()` reports `26.3-R0.1-SNAPSHOT` for plugin compatibility.
+Artifact versions stay separate: local builds use `26.3.local-SNAPSHOT`; CI builds use
+`26.3.build.<number>-alpha`, with `BUILD_NUMBER` set to the GitHub Actions run number.
 The server manifest records the build number and Git commit.
 
 New `server.properties` files default `bug-report-link` to
@@ -70,7 +70,7 @@ If a Pyzh patch no longer applies, resolve it in the generated source repository
 Local builds use:
 
 ```kotlin
-compileOnly("ru.turbovadim.pyzh:pyzh-api:26.2.local-SNAPSHOT")
+compileOnly("ru.turbovadim.pyzh:pyzh-api:26.3.local-SNAPSHOT")
 ```
 
 No public Maven repository is configured yet. Publish locally for development with `./gradlew publishToMavenLocal`.
